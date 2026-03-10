@@ -1,0 +1,30 @@
+{
+  "materials": [
+    {"id": "concrete", "type": "isotropic_linear", "E": 30000, "nu": 0.2}
+  ],
+  "nodes": [
+    [0.0, 0.0, 0.0], [2.0, 0.0, 0.0], [4.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0], [2.0, 1.0, 0.0], [4.0, 1.0, 0.0],
+    [0.0, 0.0, 0.5], [2.0, 0.0, 0.5], [4.0, 0.0, 0.5],
+    [0.0, 1.0, 0.5], [2.0, 1.0, 0.5], [4.0, 1.0, 0.5]
+  ],
+  "elements": [
+    {"type": "hexa8", "material": "concrete", "nodes": [0,1,4,3,6,7,10,9]},
+    {"type": "hexa8", "material": "concrete", "nodes": [1,2,5,4,7,8,11,10]}
+  ],
+  "boundary_conditions": [
+    {"node": 0, "dofs": [0,1,2]},
+    {"node": 3, "dofs": [0,1,2]},
+    {"node": 6, "dofs": [0,1,2]},
+    {"node": 9, "dofs": [0,1,2]},
+    {"node": 2, "dofs": [1,2]},
+    {"node": 5, "dofs": [1,2]},
+    {"node": 8, "dofs": [1,2]},
+    {"node": 11,"dofs": [1,2]}
+  ],
+  "loads": [
+    {"node": 7,  "dof": 2, "value": -500},
+    {"node": 10, "dof": 2, "value": -500}
+  ],
+  "solver": "lu"
+}

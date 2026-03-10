@@ -1,0 +1,30 @@
+{
+  "materials": [
+    {"id": "steel", "type": "isotropic_linear", "E": 210000, "nu": 0.3}
+  ],
+  "nodes": [
+    [0, 0, 0],
+    [1, 0, 0],
+    [1, 1, 0],
+    [0, 1, 0],
+    [0, 0, 1],
+    [1, 0, 1],
+    [1, 1, 1],
+    [0, 1, 1]
+  ],
+  "elements": [
+    {"type": "hexa8", "material": "steel", "nodes": [0,1,2,3,4,5,6,7]}
+  ],
+  "boundary_conditions": [
+    {"node": 0, "dofs": [0,1,2]},
+    {"node": 1, "dofs": [0,1,2]},
+    {"node": 2, "dofs": [0,1,2]},
+    {"node": 3, "dofs": [0,1,2]}
+  ],
+  "loads": [
+    {"node": 4, "dof": 2, "value": -250},
+    {"node": 5, "dof": 2, "value": -250},
+    {"node": 6, "dof": 2, "value": -250},
+    {"node": 7, "dof": 2, "value": -250}
+  ]
+}
