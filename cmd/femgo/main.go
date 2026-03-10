@@ -1,14 +1,23 @@
-// Cantilever beam example – 3D Hexa8 mesh.
+// go-fem HTTP API server.
 //
-// Geometry: beam along X, length L, cross-section b×h (Y×Z).
-// Fixed at x = 0, tip load P in -Z direction.
+// Exposes a JSON API that accepts a FEM problem definition
+// and returns displacement results.
 //
-// Usage:  go run ./cmd/femgo
+// Usage:
+//
+//	go run ./cmd/femgo                  # listen on :8080
+//	go run ./cmd/femgo -addr :9090      # custom port
+//	curl -X POST http://localhost:8080/solve -d @problem.json
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
+	"log"
 	"math"
+	"net/http"
+	"time"
 
 	"go-fem/analysis"
 	"go-fem/domain"
@@ -17,136 +26,305 @@ import (
 	"go-fem/solver"
 )
 
-func main() {
-	// ---- Parameters ----
-	const (
-		L  = 10.0   // beam length (X)
-		b  = 1.0    // width (Y)
-		h  = 1.0    // height (Z)
-		E  = 2e5    // Young's modulus [MPa]
-		nu = 0.3    // Poisson's ratio
-		P  = -1000.0 // total tip load [N] in Z direction
+// ---------------------------------------------------------------------------
+// JSON input types
+// ---------------------------------------------------------------------------
 
-		nx = 10 // divisions along X
-		ny = 2  // divisions along Y
-		nz = 2  // divisions along Z
-	)
+type ProblemInput struct {
+	Materials          []MaterialInput `json:"materials"`
+	Nodes              [][3]float64    `json:"nodes"`
+	Elements           []ElementInput  `json:"elements"`
+	BoundaryConditions []BCInput       `json:"boundary_conditions"`
+	Loads              []LoadInput     `json:"loads"`
+	Solver             string          `json:"solver,omitempty"` // "cholesky" (default) | "lu"
+}
 
-	mat3d := material.NewIsotropicLinear(E, nu)
+type MaterialInput struct {
+	ID   string  `json:"id"`
+	Type string  `json:"type"` // "isotropic_linear"
+	E    float64 `json:"E"`
+	Nu   float64 `json:"nu"`
+}
+
+type ElementInput struct {
+	Type     string `json:"type"` // "tet4" | "hexa8"
+	Material string `json:"material"`
+	Nodes    []int  `json:"nodes"`
+}
+
+type BCInput struct {
+	Node int   `json:"node"`
+	DOFs []int `json:"dofs"` // e.g. [0,1,2] for all, [2] for Z only
+}
+
+type LoadInput struct {
+	Node  int     `json:"node"`
+	DOF   int     `json:"dof"` // 0=X, 1=Y, 2=Z
+	Value float64 `json:"value"`
+}
+
+// ---------------------------------------------------------------------------
+// JSON output types
+// ---------------------------------------------------------------------------
+
+type ProblemOutput struct {
+	Success       bool                 `json:"success"`
+	Error         string               `json:"error,omitempty"`
+	Info          *InfoOutput          `json:"info,omitempty"`
+	Displacements []DisplacementOutput `json:"displacements,omitempty"`
+	Summary       *SummaryOutput       `json:"summary,omitempty"`
+	ElapsedMs     float64              `json:"elapsed_ms,omitempty"`
+}
+
+type InfoOutput struct {
+	NumNodes    int    `json:"num_nodes"`
+	NumElements int    `json:"num_elements"`
+	NumDOFs     int    `json:"num_dofs"`
+	Solver      string `json:"solver"`
+}
+
+type DisplacementOutput struct {
+	Node int     `json:"node"`
+	Ux   float64 `json:"ux"`
+	Uy   float64 `json:"uy"`
+	Uz   float64 `json:"uz"`
+}
+
+type SummaryOutput struct {
+	MaxAbsDisplacement MaxDispOutput `json:"max_abs_displacement"`
+}
+
+type MaxDispOutput struct {
+	Node      int     `json:"node"`
+	Component string  `json:"component"` // "ux", "uy", or "uz"
+	Value     float64 `json:"value"`
+}
+
+// ---------------------------------------------------------------------------
+// Solver logic
+// ---------------------------------------------------------------------------
+
+func solveProblem(input ProblemInput) ProblemOutput {
+	t0 := time.Now()
+
+	// --- Build materials map ---
+	mats := make(map[string]material.Material3D, len(input.Materials))
+	for _, mi := range input.Materials {
+		switch mi.Type {
+		case "isotropic_linear":
+			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		default:
+			return errorResponse("unknown material type: %s", mi.Type)
+		}
+	}
+
+	// --- Build domain ---
 	dom := domain.NewDomain()
 
-	// ---- Generate nodes ----
-	nxp1, nyp1, nzp1 := nx+1, ny+1, nz+1
-	nodeIdx := func(ix, iy, iz int) int {
-		return iz*nyp1*nxp1 + iy*nxp1 + ix
+	for _, n := range input.Nodes {
+		dom.AddNode(n[0], n[1], n[2])
 	}
 
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			for ix := 0; ix < nxp1; ix++ {
-				x := float64(ix) * L / float64(nx)
-				y := float64(iy) * b / float64(ny)
-				z := float64(iz) * h / float64(nz)
-				dom.AddNode(x, y, z)
+	for eid, ei := range input.Elements {
+		mat3d, ok := mats[ei.Material]
+		if !ok {
+			return errorResponse("element %d references unknown material: %s", eid, ei.Material)
+		}
+
+		switch ei.Type {
+		case "tet4":
+			if len(ei.Nodes) != 4 {
+				return errorResponse("element %d (tet4) requires 4 nodes, got %d", eid, len(ei.Nodes))
 			}
-		}
-	}
-
-	// ---- Generate Hexa8 elements ----
-	elemID := 0
-	for iz := 0; iz < nz; iz++ {
-		for iy := 0; iy < ny; iy++ {
-			for ix := 0; ix < nx; ix++ {
-				n := [8]int{
-					nodeIdx(ix, iy, iz),
-					nodeIdx(ix+1, iy, iz),
-					nodeIdx(ix+1, iy+1, iz),
-					nodeIdx(ix, iy+1, iz),
-					nodeIdx(ix, iy, iz+1),
-					nodeIdx(ix+1, iy, iz+1),
-					nodeIdx(ix+1, iy+1, iz+1),
-					nodeIdx(ix, iy+1, iz+1),
+			var nodes [4]int
+			var coords [4][3]float64
+			for i, nid := range ei.Nodes {
+				if nid < 0 || nid >= len(dom.Nodes) {
+					return errorResponse("element %d: node %d out of range", eid, nid)
 				}
-				var coords [8][3]float64
-				for i, nid := range n {
-					coords[i] = dom.Nodes[nid].Coord
-				}
-				dom.AddElement(element.NewHexa8(elemID, n, coords, mat3d))
-				elemID++
+				nodes[i] = nid
+				coords[i] = dom.Nodes[nid].Coord
 			}
+			dom.AddElement(element.NewTet4(eid, nodes, coords, mat3d))
+
+		case "hexa8":
+			if len(ei.Nodes) != 8 {
+				return errorResponse("element %d (hexa8) requires 8 nodes, got %d", eid, len(ei.Nodes))
+			}
+			var nodes [8]int
+			var coords [8][3]float64
+			for i, nid := range ei.Nodes {
+				if nid < 0 || nid >= len(dom.Nodes) {
+					return errorResponse("element %d: node %d out of range", eid, nid)
+				}
+				nodes[i] = nid
+				coords[i] = dom.Nodes[nid].Coord
+			}
+			dom.AddElement(element.NewHexa8(eid, nodes, coords, mat3d))
+
+		default:
+			return errorResponse("unknown element type: %s", ei.Type)
 		}
 	}
 
-	// ---- Boundary conditions: fix all DOFs at x = 0 ----
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			dom.FixNode(nodeIdx(0, iy, iz))
+	// --- Boundary conditions ---
+	for _, bc := range input.BoundaryConditions {
+		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
+			return errorResponse("BC: node %d out of range", bc.Node)
+		}
+		for _, dof := range bc.DOFs {
+			if dof < 0 || dof > 2 {
+				return errorResponse("BC: invalid dof %d (must be 0, 1, or 2)", dof)
+			}
+			dom.FixDOF(bc.Node, dof)
 		}
 	}
 
-	// ---- Tip load: distribute P among nodes at x = L ----
-	tipNodes := 0
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			tipNodes++
+	// --- Loads ---
+	for _, ld := range input.Loads {
+		if ld.Node < 0 || ld.Node >= len(dom.Nodes) {
+			return errorResponse("load: node %d out of range", ld.Node)
 		}
-	}
-	pPerNode := P / float64(tipNodes)
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			dom.ApplyLoad(nodeIdx(nx, iy, iz), 2, pPerNode) // Z direction
+		if ld.DOF < 0 || ld.DOF > 2 {
+			return errorResponse("load: invalid dof %d", ld.DOF)
 		}
+		dom.ApplyLoad(ld.Node, ld.DOF, ld.Value)
 	}
 
-	// ---- Solve ----
-	ana := analysis.StaticLinearAnalysis{
-		Dom:    dom,
-		Solver: solver.Cholesky{},
+	// --- Pick solver ---
+	solverName := "cholesky"
+	var slv solver.LinearSolver
+	switch input.Solver {
+	case "", "cholesky":
+		slv = solver.Cholesky{}
+	case "lu":
+		slv = solver.LU{}
+		solverName = "lu"
+	default:
+		return errorResponse("unknown solver: %s", input.Solver)
 	}
 
-	fmt.Println("=== go-fem: 3D Cantilever Beam (Hexa8) ===")
-	fmt.Printf("Mesh: %d×%d×%d = %d elements, %d nodes, %d DOFs\n",
-		nx, ny, nz, len(dom.Elements), len(dom.Nodes), dom.NumDOF())
-
+	// --- Solve ---
+	ana := analysis.StaticLinearAnalysis{Dom: dom, Solver: slv}
 	U, err := ana.Run()
 	if err != nil {
-		fmt.Printf("ERROR: %v\n", err)
-		return
+		return errorResponse("analysis failed: %v", err)
 	}
 
 	disp := dom.SetDisplacements(U)
 
-	// ---- Find max tip deflection in Z ----
-	var maxUz float64
+	// --- Build displacement output ---
+	disps := make([]DisplacementOutput, len(disp))
+	var maxVal float64
 	var maxNode int
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			nid := nodeIdx(nx, iy, iz)
-			uz := disp[nid][2]
-			if math.Abs(uz) > math.Abs(maxUz) {
-				maxUz = uz
-				maxNode = nid
+	var maxComp string
+	for i, d := range disp {
+		disps[i] = DisplacementOutput{Node: i, Ux: d[0], Uy: d[1], Uz: d[2]}
+		for c, v := range d {
+			if math.Abs(v) > math.Abs(maxVal) {
+				maxVal = v
+				maxNode = i
+				maxComp = [3]string{"ux", "uy", "uz"}[c]
 			}
 		}
 	}
 
-	// ---- Analytical reference (Euler-Bernoulli) ----
-	I := b * h * h * h / 12.0
-	deltaEB := math.Abs(P) * L * L * L / (3 * E * I)
+	elapsed := time.Since(t0).Seconds() * 1000
 
-	fmt.Printf("\nResults:\n")
-	fmt.Printf("  Max tip Uz  = %.6f  (node %d)\n", maxUz, maxNode)
-	fmt.Printf("  Beam theory = %.6f  (Euler-Bernoulli PL³/3EI)\n", -deltaEB)
-	fmt.Printf("  Ratio FEM/EB = %.4f\n", math.Abs(maxUz)/deltaEB)
-
-	// ---- Print displacement field at tip ----
-	fmt.Printf("\nTip node displacements (x = %.1f):\n", L)
-	fmt.Printf("  %-6s %12s %12s %12s\n", "Node", "Ux", "Uy", "Uz")
-	for iz := 0; iz < nzp1; iz++ {
-		for iy := 0; iy < nyp1; iy++ {
-			nid := nodeIdx(nx, iy, iz)
-			d := disp[nid]
-			fmt.Printf("  %-6d %12.6f %12.6f %12.6f\n", nid, d[0], d[1], d[2])
-		}
+	return ProblemOutput{
+		Success: true,
+		Info: &InfoOutput{
+			NumNodes:    len(dom.Nodes),
+			NumElements: len(dom.Elements),
+			NumDOFs:     dom.NumDOF(),
+			Solver:      solverName,
+		},
+		Displacements: disps,
+		Summary: &SummaryOutput{
+			MaxAbsDisplacement: MaxDispOutput{
+				Node:      maxNode,
+				Component: maxComp,
+				Value:     maxVal,
+			},
+		},
+		ElapsedMs: elapsed,
 	}
+}
+
+func errorResponse(format string, args ...any) ProblemOutput {
+	return ProblemOutput{
+		Success: false,
+		Error:   fmt.Sprintf(format, args...),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP handlers
+// ---------------------------------------------------------------------------
+
+func handleSolve(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, `{"success":false,"error":"method not allowed, use POST"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	var input ProblemInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ProblemOutput{
+			Success: false,
+			Error:   fmt.Sprintf("invalid JSON: %v", err),
+		})
+		return
+	}
+
+	result := solveProblem(input)
+
+	w.Header().Set("Content-Type", "application/json")
+	if !result.Success {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+	}
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok","service":"go-fem"}`))
+}
+
+func handleInfo(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"service":  "go-fem",
+		"version":  "0.1.0",
+		"elements": []string{"tet4", "hexa8"},
+		"materials": []string{"isotropic_linear"},
+		"solvers":  []string{"cholesky", "lu"},
+		"endpoints": map[string]string{
+			"POST /solve": "Submit a FEM problem (JSON) and get displacement results",
+			"GET /health":  "Health check",
+			"GET /":        "This info page",
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+func main() {
+	addr := flag.String("addr", ":8080", "listen address")
+	flag.Parse()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handleInfo)
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/solve", handleSolve)
+
+	log.Printf("go-fem API server listening on %s", *addr)
+	log.Printf("  POST /solve   – solve a FEM problem")
+	log.Printf("  GET  /health  – health check")
+	log.Printf("  GET  /        – API info")
+	log.Fatal(http.ListenAndServe(*addr, mux))
 }
