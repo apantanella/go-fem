@@ -351,6 +351,34 @@ A 5-node Warren truss, 7 members, 10 kN downward load at midspan:
 
 ---
 
+## Validation
+
+`validation/main.go` runs a suite of problems with known closed-form solutions and verifies that the numerical result matches analytical theory to tight tolerances.
+
+```bash
+go run ./validation
+```
+
+### Results (March 10, 2026)
+
+| Case | Element | Numerical | Theoretical | Rel. Err (%) | Status |
+|------|---------|-----------|-------------|--------------|--------|
+| Truss – axial deformation | `Truss3D` | 5.000e-04 | 5.000e-04 | 0.00e+00 | PASS ✓ |
+| Beam – cantilever tip deflection | `ElasticBeam3D` | 3.333e-01 | 3.333e-01 | 0.00e+00 | PASS ✓ |
+| Beam – simply-supported midspan | `ElasticBeam3D` | 1.667e-01 | 1.667e-01 | 0.00e+00 | PASS ✓ |
+| Hexa8 – uniaxial patch test | `Hexa8` | 1.000e+00 | 1.000e+00 | 0.00e+00 | PASS ✓ |
+
+### Case descriptions
+
+| Case | Theoretical formula | Parameters |
+|------|--------------------|-----------------------|
+| Truss axial deformation | $\delta_x = \frac{FL}{EA}$ | $F=10000\ \text{N},\ L=1\ \text{m},\ E=200000\ \text{N/mm}^2,\ A=100\ \text{mm}^2$ |
+| Cantilever tip deflection | $\delta_y = \frac{FL^3}{3EI_z}$ | $F=1,\ L=1,\ E=1,\ I_z=1$ |
+| Simply-supported midspan | $\delta_{\text{mid}} = \frac{FL^3}{48EI_z}$ | $F=1,\ L=2,\ E=1,\ I_z=1$ |
+| Hexa8 uniaxial patch test | $u_x = \frac{\sigma_x}{E}\cdot L = 1$ | Unit cube, $E=1,\ \nu=0,\ F=1$ distributed over $x=1$ face |
+
+---
+
 ## Dependencies
 
 | Dependency | Version | Purpose |
