@@ -2,7 +2,11 @@
 // Inspired by the OpenSees Element architecture.
 package element
 
-import "gonum.org/v1/gonum/mat"
+import (
+	"go-fem/dof"
+
+	"gonum.org/v1/gonum/mat"
+)
 
 // Element is the interface for all finite elements.
 type Element interface {
@@ -18,6 +22,19 @@ type Element interface {
 	// NumDOF returns the total number of DOFs for this element.
 	NumDOF() int
 
-	// Update recomputes element state for the given global displacements.
+	// DOFPerNode returns the number of DOFs per node (3 for solids/truss, 6 for beams/shells).
+	DOFPerNode() int
+
+	// DOFTypes returns the flat list of DOF types, one per local DOF.
+	// Length must equal NumDOF(). Used for global assembly mapping.
+	DOFTypes() []dof.Type
+
+	// Update recomputes element state for the given element displacements.
 	Update(disp []float64) error
+
+	// CommitState commits the current trial state (for nonlinear analysis).
+	CommitState() error
+
+	// RevertToStart reverts the element to its initial state.
+	RevertToStart() error
 }

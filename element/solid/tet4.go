@@ -1,8 +1,9 @@
-package element
+package solid
 
 import (
 	"math"
 
+	"go-fem/dof"
 	"go-fem/material"
 
 	"gonum.org/v1/gonum/mat"
@@ -119,6 +120,10 @@ func (t *Tet4) NodeIDs() []int { return t.Nds[:] }
 func (t *Tet4) NumDOF() int    { return 12 }
 
 func (t *Tet4) Update(_ []float64) error { return nil }
+func (t *Tet4) DOFPerNode() int            { return 3 }
+func (t *Tet4) DOFTypes() []dof.Type       { return dof.Translational3D(4) }
+func (t *Tet4) CommitState() error         { return nil }
+func (t *Tet4) RevertToStart() error       { return nil }
 
 // Volume returns the element volume.
 func (t *Tet4) Volume() float64 { return t.vol }

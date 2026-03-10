@@ -1,8 +1,9 @@
-package element
+package solid
 
 import (
 	"math"
 
+	"go-fem/dof"
 	"go-fem/material"
 
 	"gonum.org/v1/gonum/mat"
@@ -132,3 +133,7 @@ func (h *Hexa8) NodeIDs() []int { return h.Nds[:] }
 func (h *Hexa8) NumDOF() int    { return 24 }
 
 func (h *Hexa8) Update(_ []float64) error { return nil }
+func (h *Hexa8) DOFPerNode() int            { return 3 }
+func (h *Hexa8) DOFTypes() []dof.Type       { return dof.Translational3D(8) }
+func (h *Hexa8) CommitState() error         { return nil }
+func (h *Hexa8) RevertToStart() error       { return nil }

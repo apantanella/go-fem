@@ -12,7 +12,7 @@ import (
 
 	"go-fem/analysis"
 	"go-fem/domain"
-	"go-fem/element"
+	"go-fem/element/solid"
 	"go-fem/material"
 	"go-fem/solver"
 )
@@ -59,7 +59,7 @@ func cantilever(nx, ny, nz int) float64 {
 				for i, nid := range n {
 					c[i] = dom.Nodes[nid].Coord
 				}
-				dom.AddElement(element.NewHexa8(eid, n, c, mat3d))
+				dom.AddElement(solid.NewHexa8(eid, n, c, mat3d))
 				eid++
 			}
 		}

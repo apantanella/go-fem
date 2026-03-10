@@ -8,7 +8,7 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
-// Node3D represents a node with 3 translational DOFs.
+// Node3D represents a node with 3D coordinates.
 type Node3D struct {
 	ID    int
 	Coord [3]float64 // (X, Y, Z)
@@ -17,15 +17,15 @@ type Node3D struct {
 // BC represents a Dirichlet (fixed) boundary condition.
 type BC struct {
 	NodeID int
-	DOF    int     // 0 = X, 1 = Y, 2 = Z
+	DOF    int     // 0=UX, 1=UY, 2=UZ, 3=RX, 4=RY, 5=RZ
 	Value  float64 // prescribed displacement (usually 0)
 }
 
-// NodalLoad represents a concentrated force on a node.
+// NodalLoad represents a concentrated force or moment on a node.
 type NodalLoad struct {
 	NodeID int
-	DOF    int     // 0 = X, 1 = Y, 2 = Z
-	Value  float64 // force magnitude
+	DOF    int     // 0=UX, 1=UY, 2=UZ, 3=RX, 4=RY, 5=RZ
+	Value  float64 // force/moment magnitude
 }
 
 // Domain holds the complete FEM model.
@@ -34,6 +34,10 @@ type Domain struct {
 	Elements []element.Element
 	BCs      []BC
 	Loads    []NodalLoad
+
+	// DOFPerNode is auto-detected during Assemble:
+	// 3 for pure solid/truss, 6 when beams/shells are present.
+	DOFPerNode int
 
 	K *mat.Dense    // global stiffness (assembled)
 	F *mat.VecDense // global force vector
@@ -61,26 +65,47 @@ func (d *Domain) FixDOF(nodeID, dof int) {
 	d.BCs = append(d.BCs, BC{NodeID: nodeID, DOF: dof, Value: 0})
 }
 
-// FixNode fixes all 3 DOFs of a node.
+// FixNode fixes all translational DOFs (UX, UY, UZ) of a node.
 func (d *Domain) FixNode(nodeID int) {
 	for dof := 0; dof < 3; dof++ {
 		d.FixDOF(nodeID, dof)
 	}
 }
 
-// ApplyLoad adds a nodal force.
+// FixNodeAll fixes all 6 DOFs (translations + rotations) of a node.
+func (d *Domain) FixNodeAll(nodeID int) {
+	for dof := 0; dof < 6; dof++ {
+		d.FixDOF(nodeID, dof)
+	}
+}
+
+// ApplyLoad adds a nodal force or moment.
 func (d *Domain) ApplyLoad(nodeID, dof int, value float64) {
 	d.Loads = append(d.Loads, NodalLoad{NodeID: nodeID, DOF: dof, Value: value})
 }
 
-// NumDOF returns the total number of DOFs (3 per node).
+// NumDOF returns the total number of DOFs.
 func (d *Domain) NumDOF() int {
-	return len(d.Nodes) * 3
+	dpn := d.DOFPerNode
+	if dpn == 0 {
+		dpn = 3
+	}
+	return len(d.Nodes) * dpn
 }
 
 // Assemble constructs the global K and F.
+// Auto-detects DOFPerNode from the maximum across all elements.
 func (d *Domain) Assemble() {
-	ndof := d.NumDOF()
+	// Auto-detect DOFs per node
+	d.DOFPerNode = 3
+	for _, elem := range d.Elements {
+		if dpn := elem.DOFPerNode(); dpn > d.DOFPerNode {
+			d.DOFPerNode = dpn
+		}
+	}
+
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
 	d.K = mat.NewDense(ndof, ndof, nil)
 	d.F = mat.NewVecDense(ndof, nil)
 
@@ -88,20 +113,22 @@ func (d *Domain) Assemble() {
 	for _, elem := range d.Elements {
 		ke := elem.GetTangentStiffness()
 		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
 		eldof := elem.NumDOF()
+		elemDPN := elem.DOFPerNode()
 
-		// Build local → global DOF map.
-		dofs := make([]int, eldof)
-		for i, nid := range nids {
-			dofs[3*i+0] = 3*nid + 0
-			dofs[3*i+1] = 3*nid + 1
-			dofs[3*i+2] = 3*nid + 2
+		// Build local → global DOF map using DOF types
+		globalDOFs := make([]int, eldof)
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			nodeID := nids[nodeIdx]
+			globalDOFs[i] = nodeID*dpn + int(dt)
 		}
 
 		for i := 0; i < eldof; i++ {
-			gi := dofs[i]
+			gi := globalDOFs[i]
 			for j := 0; j < eldof; j++ {
-				gj := dofs[j]
+				gj := globalDOFs[j]
 				d.K.Set(gi, gj, d.K.At(gi, gj)+ke.At(i, j))
 			}
 		}
@@ -109,19 +136,20 @@ func (d *Domain) Assemble() {
 
 	// --- Assemble load vector ---
 	for _, load := range d.Loads {
-		gdof := 3*load.NodeID + load.DOF
+		gdof := load.NodeID*dpn + load.DOF
 		d.F.SetVec(gdof, d.F.AtVec(gdof)+load.Value)
 	}
 }
 
 // ApplyDirichletBC modifies K and F for prescribed displacements.
-// Uses the row/column zeroing technique: for each fixed DOF i,
-//
-//	K[i,:] = 0,  K[:,i] = 0,  K[i,i] = 1,  F[i] = prescribed value.
 func (d *Domain) ApplyDirichletBC() {
-	ndof := d.NumDOF()
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
 	for _, bc := range d.BCs {
-		gdof := 3*bc.NodeID + bc.DOF
+		gdof := bc.NodeID*dpn + bc.DOF
+		if gdof >= ndof {
+			continue
+		}
 		for j := 0; j < ndof; j++ {
 			d.K.Set(gdof, j, 0)
 			d.K.Set(j, gdof, 0)
@@ -131,14 +159,15 @@ func (d *Domain) ApplyDirichletBC() {
 	}
 }
 
-// SetDisplacements stores the computed displacement for each node.
-// Returns a slice indexed by node ID with [ux, uy, uz].
-func (d *Domain) SetDisplacements(U *mat.VecDense) [][3]float64 {
-	disp := make([][3]float64, len(d.Nodes))
+// SetDisplacements extracts per-node displacements from the global solution vector.
+// Returns a slice indexed by node ID with up to 6 components [ux,uy,uz,rx,ry,rz].
+func (d *Domain) SetDisplacements(U *mat.VecDense) [][6]float64 {
+	dpn := d.DOFPerNode
+	disp := make([][6]float64, len(d.Nodes))
 	for i := range d.Nodes {
-		disp[i][0] = U.AtVec(3*i + 0)
-		disp[i][1] = U.AtVec(3*i + 1)
-		disp[i][2] = U.AtVec(3*i + 2)
+		for j := 0; j < dpn; j++ {
+			disp[i][j] = U.AtVec(i*dpn + j)
+		}
 	}
 	return disp
 }
