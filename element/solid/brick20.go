@@ -18,6 +18,7 @@ type Brick20 struct {
 	Mat    material.Material3D
 
 	ke *mat.Dense
+	ue [60]float64 // element displacements (set by Update)
 }
 
 // brick20Ref holds the reference coordinates for the 20-node serendipity element.
@@ -184,12 +185,70 @@ func (b *Brick20) shapeDeriv(xi, eta, zeta float64, dN *mat.Dense) {
 
 // ---------- Element interface ----------
 
-func (b *Brick20) GetTangentStiffness() *mat.Dense  { return b.ke }
-func (b *Brick20) GetResistingForce() *mat.VecDense { return mat.NewVecDense(60, nil) }
-func (b *Brick20) NodeIDs() []int                   { return b.Nds[:] }
-func (b *Brick20) NumDOF() int                      { return 60 }
-func (b *Brick20) DOFPerNode() int                  { return 3 }
-func (b *Brick20) DOFTypes() []dof.Type             { return dof.Translational3D(20) }
-func (b *Brick20) Update(_ []float64) error         { return nil }
-func (b *Brick20) CommitState() error               { return nil }
-func (b *Brick20) RevertToStart() error             { return nil }
+func (b *Brick20) GetTangentStiffness() *mat.Dense { return b.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector).
+func (b *Brick20) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(60, nil)
+	f.MulVec(b.ke, mat.NewVecDense(60, b.ue[:]))
+	return f
+}
+
+func (b *Brick20) NodeIDs() []int       { return b.Nds[:] }
+func (b *Brick20) NumDOF() int          { return 60 }
+func (b *Brick20) DOFPerNode() int      { return 3 }
+func (b *Brick20) DOFTypes() []dof.Type { return dof.Translational3D(20) }
+
+// Update stores the element displacements for post-processing.
+func (b *Brick20) Update(disp []float64) error { copy(b.ue[:], disp); return nil }
+
+func (b *Brick20) CommitState() error   { return nil }
+func (b *Brick20) RevertToStart() error { b.ue = [60]float64{}; return nil }
+
+// StressCentroid returns the Cauchy stress at the element centroid (ξ=η=ζ=0)
+// in Voigt notation [sxx, syy, szz, txy, tyz, txz].
+func (b *Brick20) StressCentroid() [6]float64 {
+	const ndof = 60
+	D := b.Mat.GetTangent()
+
+	dNnat := mat.NewDense(3, 20, nil)
+	b.shapeDeriv(0, 0, 0, dNnat)
+
+	X := mat.NewDense(20, 3, nil)
+	for i := 0; i < 20; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, b.Coords[i][j])
+		}
+	}
+	J := mat.NewDense(3, 3, nil)
+	J.Mul(dNnat, X)
+	var Jinv mat.Dense
+	Jinv.Inverse(J)
+	dN := mat.NewDense(3, 20, nil)
+	dN.Mul(&Jinv, dNnat)
+
+	Bmat := mat.NewDense(6, ndof, nil)
+	for n := 0; n < 20; n++ {
+		dx, dy, dz := dN.At(0, n), dN.At(1, n), dN.At(2, n)
+		c := 3 * n
+		Bmat.Set(0, c, dx)
+		Bmat.Set(1, c+1, dy)
+		Bmat.Set(2, c+2, dz)
+		Bmat.Set(3, c, dy)
+		Bmat.Set(3, c+1, dx)
+		Bmat.Set(4, c+1, dz)
+		Bmat.Set(4, c+2, dy)
+		Bmat.Set(5, c, dz)
+		Bmat.Set(5, c+2, dx)
+	}
+
+	Bu := mat.NewVecDense(6, nil)
+	Bu.MulVec(Bmat, mat.NewVecDense(ndof, b.ue[:]))
+	sigma := mat.NewVecDense(6, nil)
+	sigma.MulVec(D, Bu)
+	var s [6]float64
+	for i := range s {
+		s[i] = sigma.AtVec(i)
+	}
+	return s
+}

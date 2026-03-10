@@ -48,9 +48,9 @@ func caseAxialTruss() (numerical, theoretical float64) {
 	coords := [2][3]float64{{0, 0, 0}, {1, 0, 0}}
 	dom.AddElement(truss.NewTruss3D(0, [2]int{n0, n1}, coords, 200000, 100))
 
-	dom.FixNode(n0)    // fix UX, UY, UZ at root
-	dom.FixDOF(n1, 1)  // UY at free end (no transverse stiffness in pure truss)
-	dom.FixDOF(n1, 2)  // UZ at free end
+	dom.FixNode(n0)   // fix UX, UY, UZ at root
+	dom.FixDOF(n1, 1) // UY at free end (no transverse stiffness in pure truss)
+	dom.FixDOF(n1, 2) // UZ at free end
 	dom.ApplyLoad(n1, 0, 10000)
 
 	U := mustSolve(dom)
@@ -207,8 +207,109 @@ func caseSimplySupportedBeam() (numerical, theoretical float64) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// Case 5 – Truss AxialForce post-processing
+//
+//   Same setup as Case 1.  After solving, AxialForce() must return F = 10 000 N.
 // ─────────────────────────────────────────────────────────────────────────────
+
+func caseTrussAxialForce() (numerical, theoretical float64) {
+	theoretical = 10000.0 // N
+
+	dom := domain.NewDomain()
+	n0 := dom.AddNode(0, 0, 0)
+	n1 := dom.AddNode(1, 0, 0)
+
+	coords := [2][3]float64{{0, 0, 0}, {1, 0, 0}}
+	el := truss.NewTruss3D(0, [2]int{n0, n1}, coords, 200000, 100)
+	dom.AddElement(el)
+	dom.FixNode(n0)
+	dom.FixDOF(n1, 1)
+	dom.FixDOF(n1, 2)
+	dom.ApplyLoad(n1, 0, 10000)
+
+	mustSolve(dom) // Update() is called inside Run()
+	numerical = el.AxialForce()
+	return
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Case 6 – Cantilever beam EndForces (moment at fixed support)
+//
+//   Same cantilever as Case 2 (L=1, E=1, Iz=1, F=1).
+//   At node i (fixed end): |Mz| = F·L = 1  (theoretical bending moment).
+//   At node j (free end):  |Mz| = 0 (free end — zero moment).
+// ─────────────────────────────────────────────────────────────────────────────
+
+func caseBeamEndMoment() (numerical, theoretical float64) {
+	const (
+		E  = 1.0
+		Iz = 1.0
+		L  = 1.0
+		F  = 1.0
+	)
+	theoretical = F * L // moment at fixed support = 1
+
+	dom := domain.NewDomain()
+	n0 := dom.AddNode(0, 0, 0)
+	n1 := dom.AddNode(L, 0, 0)
+
+	coords := [2][3]float64{{0, 0, 0}, {L, 0, 0}}
+	sec := section.BeamSection3D{A: 1, Iy: 1, Iz: Iz, J: 1}
+	el := frame.NewElasticBeam3D(0, [2]int{n0, n1}, coords, E, 0.5, sec, [3]float64{0, 0, 1})
+	dom.AddElement(el)
+	dom.FixNodeAll(n0)
+	dom.ApplyLoad(n1, 1, F)
+
+	mustSolve(dom)
+	ef := el.EndForces()
+	numerical = math.Abs(ef.I[5]) // |Mz| at fixed end
+	return
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Case 7 – Hexa8 centroidal stress
+//
+//   Same uniaxial patch as Case 3 (unit cube, E=1, ν=0, F=1).
+//   Theoretical: σxx = F/A = 1,  all other components = 0.
+// ─────────────────────────────────────────────────────────────────────────────
+
+func caseHexa8Stress() (numerical, theoretical float64) {
+	theoretical = 1.0 // σxx
+
+	dom := domain.NewDomain()
+	nids := [8]int{
+		dom.AddNode(0, 0, 0),
+		dom.AddNode(1, 0, 0),
+		dom.AddNode(1, 1, 0),
+		dom.AddNode(0, 1, 0),
+		dom.AddNode(0, 0, 1),
+		dom.AddNode(1, 0, 1),
+		dom.AddNode(1, 1, 1),
+		dom.AddNode(0, 1, 1),
+	}
+	coords := [8][3]float64{
+		{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
+		{0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1},
+	}
+	mat3d := material.NewIsotropicLinear(1, 0)
+	el := solid.NewHexa8(0, nids, coords, mat3d)
+	dom.AddElement(el)
+	for _, id := range []int{nids[0], nids[3], nids[4], nids[7]} {
+		dom.FixDOF(id, 0)
+	}
+	for _, id := range []int{nids[0], nids[1], nids[4], nids[5]} {
+		dom.FixDOF(id, 1)
+	}
+	for _, id := range []int{nids[0], nids[1], nids[2], nids[3]} {
+		dom.FixDOF(id, 2)
+	}
+	for _, id := range []int{nids[1], nids[2], nids[5], nids[6]} {
+		dom.ApplyLoad(id, 0, 0.25)
+	}
+	mustSolve(dom)
+	numerical = el.StressCentroid()[0] // σxx
+	return
+}
 
 func mustSolve(dom *domain.Domain) *mat.VecDense {
 	ana := analysis.StaticLinearAnalysis{Dom: dom, Solver: solver.LU{}}
@@ -224,17 +325,20 @@ func mustSolve(dom *domain.Domain) *mat.VecDense {
 // ─────────────────────────────────────────────────────────────────────────────
 
 type testCase struct {
-	name        string
-	run         func() (numerical, theoretical float64)
-	tolPct      float64 // acceptable relative error in percent
+	name   string
+	run    func() (numerical, theoretical float64)
+	tolPct float64 // acceptable relative error in percent
 }
 
 func main() {
 	cases := []testCase{
-		{"Truss     – axial deformation",             caseAxialTruss,          1e-8},
-		{"Beam      – cantilever tip deflection",     caseCantileverBeam,      1e-8},
-		{"Beam      – simply-supported midspan",      caseSimplySupportedBeam, 1e-8},
-		{"Hexa8     – uniaxial patch test",           caseHexa8Uniaxial,       1e-8},
+		{"Truss     – axial deformation", caseAxialTruss, 1e-8},
+		{"Beam      – cantilever tip deflection", caseCantileverBeam, 1e-8},
+		{"Beam      – simply-supported midspan", caseSimplySupportedBeam, 1e-8},
+		{"Hexa8     – uniaxial patch test", caseHexa8Uniaxial, 1e-8},
+		{"Truss     – AxialForce() post-processing", caseTrussAxialForce, 1e-8},
+		{"Beam      – EndForces() Mz at support", caseBeamEndMoment, 1e-8},
+		{"Hexa8     – StressCentroid() σxx", caseHexa8Stress, 1e-8},
 	}
 
 	sep := strings.Repeat("─", 88)

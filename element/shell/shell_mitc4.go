@@ -21,7 +21,8 @@ type ShellMITC4 struct {
 	Nu     float64
 	Thick  float64
 
-	ke *mat.Dense // 24×24 global stiffness
+	ke *mat.Dense  // 24×24 global stiffness
+	ue [24]float64 // element displacements (set by Update)
 }
 
 // NewShellMITC4 creates a 4-node flat shell element.
@@ -253,9 +254,9 @@ func (s *ShellMITC4) bendingKe(xl [4][2]float64) *mat.Dense {
 		for n := 0; n < 4; n++ {
 			dx, dy := dN.At(0, n), dN.At(1, n)
 			c := 3 * n
-			Bs.Set(0, c, dx)     // ∂w/∂x
-			Bs.Set(0, c+2, N[n]) // θy
-			Bs.Set(1, c, dy)     // ∂w/∂y
+			Bs.Set(0, c, dx)      // ∂w/∂x
+			Bs.Set(0, c+2, N[n])  // θy
+			Bs.Set(1, c, dy)      // ∂w/∂y
 			Bs.Set(1, c+1, -N[n]) // -θx
 		}
 
@@ -335,12 +336,140 @@ func normV(v [3]float64) float64 {
 
 // ---------- Element interface ----------
 
-func (s *ShellMITC4) GetTangentStiffness() *mat.Dense  { return s.ke }
-func (s *ShellMITC4) GetResistingForce() *mat.VecDense { return mat.NewVecDense(24, nil) }
-func (s *ShellMITC4) NodeIDs() []int                   { return s.Nds[:] }
-func (s *ShellMITC4) NumDOF() int                      { return 24 }
-func (s *ShellMITC4) DOFPerNode() int                  { return 6 }
-func (s *ShellMITC4) DOFTypes() []dof.Type             { return dof.Full6D(4) }
-func (s *ShellMITC4) Update(_ []float64) error         { return nil }
-func (s *ShellMITC4) CommitState() error               { return nil }
-func (s *ShellMITC4) RevertToStart() error             { return nil }
+func (s *ShellMITC4) GetTangentStiffness() *mat.Dense { return s.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector in global coords).
+func (s *ShellMITC4) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(24, nil)
+	f.MulVec(s.ke, mat.NewVecDense(24, s.ue[:]))
+	return f
+}
+
+func (s *ShellMITC4) NodeIDs() []int       { return s.Nds[:] }
+func (s *ShellMITC4) NumDOF() int          { return 24 }
+func (s *ShellMITC4) DOFPerNode() int      { return 6 }
+func (s *ShellMITC4) DOFTypes() []dof.Type { return dof.Full6D(4) }
+
+// Update stores the element displacements for post-processing.
+func (s *ShellMITC4) Update(disp []float64) error { copy(s.ue[:], disp); return nil }
+
+func (s *ShellMITC4) CommitState() error   { return nil }
+func (s *ShellMITC4) RevertToStart() error { s.ue = [24]float64{}; return nil }
+
+// ShellForces holds the section force and moment resultants at the element centroid
+// in the local (shell) coordinate system.
+type ShellForces struct {
+	Nx, Ny, Nxy float64 // membrane forces (force per unit length)
+	Mx, My, Mxy float64 // bending moments (moment per unit length)
+}
+
+// LocalForces computes the section forces and moments at the element centroid
+// in local shell coordinates. Requires Update() to have been called first.
+func (s *ShellMITC4) LocalForces() ShellForces {
+	e1, e2, e3 := s.localAxes()
+	Rm := [3][3]float64{e1, e2, e3} // rows are local axes in global coords
+
+	// Centroid of element in global coords
+	var cx, cy, cz float64
+	for i := 0; i < 4; i++ {
+		cx += s.Coords[i][0]
+		cy += s.Coords[i][1]
+		cz += s.Coords[i][2]
+	}
+	cx /= 4
+	cy /= 4
+	cz /= 4
+
+	// Local 2D coordinates of each node
+	var xl [4][2]float64
+	for i := 0; i < 4; i++ {
+		dx := s.Coords[i][0] - cx
+		dy := s.Coords[i][1] - cy
+		dz := s.Coords[i][2] - cz
+		xl[i][0] = Rm[0][0]*dx + Rm[0][1]*dy + Rm[0][2]*dz
+		xl[i][1] = Rm[1][0]*dx + Rm[1][1]*dy + Rm[1][2]*dz
+	}
+
+	// Transform global ue to local ue (block diagonal T, each 3-DOF subblock = Rm)
+	var uloc [24]float64
+	for blk := 0; blk < 4; blk++ {
+		for sub := 0; sub < 2; sub++ {
+			off := blk*6 + sub*3
+			for i := 0; i < 3; i++ {
+				for j := 0; j < 3; j++ {
+					uloc[off+i] += Rm[i][j] * s.ue[off+j]
+				}
+			}
+		}
+	}
+
+	// B matrices at centroid (ξ=η=0)
+	ref := [4][2]float64{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}
+	X := mat.NewDense(4, 2, nil)
+	for i := 0; i < 4; i++ {
+		X.Set(i, 0, xl[i][0])
+		X.Set(i, 1, xl[i][1])
+	}
+	dNnat := mat.NewDense(2, 4, nil)
+	s.shapeDeriv2D(0, 0, ref[:], dNnat)
+	J2 := mat.NewDense(2, 2, nil)
+	J2.Mul(dNnat, X)
+	var Jinv2 mat.Dense
+	Jinv2.Inverse(J2)
+	dN := mat.NewDense(2, 4, nil)
+	dN.Mul(&Jinv2, dNnat)
+
+	// Extract membrane DOFs [ux_local, uy_local] per node (8 total)
+	var umem [8]float64
+	for n := 0; n < 4; n++ {
+		umem[2*n] = uloc[n*6+0]
+		umem[2*n+1] = uloc[n*6+1]
+	}
+	// Extract bending DOFs [uz_local, θx_local, θy_local] per node (12 total)
+	var ubend [12]float64
+	for n := 0; n < 4; n++ {
+		ubend[3*n] = uloc[n*6+2]
+		ubend[3*n+1] = uloc[n*6+3]
+		ubend[3*n+2] = uloc[n*6+4]
+	}
+
+	// Membrane B (3x8) at centroid
+	Bm := mat.NewDense(3, 8, nil)
+	for n := 0; n < 4; n++ {
+		dx, dy := dN.At(0, n), dN.At(1, n)
+		c := 2 * n
+		Bm.Set(0, c, dx)
+		Bm.Set(1, c+1, dy)
+		Bm.Set(2, c, dy)
+		Bm.Set(2, c+1, dx)
+	}
+	E, nu, t := s.E, s.Nu, s.Thick
+	cp := E / (1 - nu*nu)
+	Dm := mat.NewDense(3, 3, []float64{cp, cp * nu, 0, cp * nu, cp, 0, 0, 0, cp * (1 - nu) / 2})
+	eps := mat.NewVecDense(3, nil)
+	eps.MulVec(Bm, mat.NewVecDense(8, umem[:]))
+	Nf := mat.NewVecDense(3, nil)
+	Nf.MulVec(Dm, eps)
+
+	// Bending B (3x12) at centroid
+	Bb := mat.NewDense(3, 12, nil)
+	for n := 0; n < 4; n++ {
+		dx, dy := dN.At(0, n), dN.At(1, n)
+		c := 3 * n
+		Bb.Set(0, c+2, dx)
+		Bb.Set(1, c+1, -dy)
+		Bb.Set(2, c+1, -dx)
+		Bb.Set(2, c+2, dy)
+	}
+	cb := E * t * t * t / (12 * (1 - nu*nu))
+	Db := mat.NewDense(3, 3, []float64{cb, cb * nu, 0, cb * nu, cb, 0, 0, 0, cb * (1 - nu) / 2})
+	kappa := mat.NewVecDense(3, nil)
+	kappa.MulVec(Bb, mat.NewVecDense(12, ubend[:]))
+	Mf := mat.NewVecDense(3, nil)
+	Mf.MulVec(Db, kappa)
+
+	return ShellForces{
+		Nx: t * Nf.AtVec(0), Ny: t * Nf.AtVec(1), Nxy: t * Nf.AtVec(2),
+		Mx: Mf.AtVec(0), My: Mf.AtVec(1), Mxy: Mf.AtVec(2),
+	}
+}

@@ -29,6 +29,7 @@ type Quad4 struct {
 	PType  PlaneType
 
 	ke *mat.Dense
+	ue [8]float64 // element displacements (set by Update)
 }
 
 // quad4Ref holds reference coords for the 4-node quad.
@@ -98,10 +99,10 @@ func (q *Quad4) formKe() {
 				dx := dN.At(0, n)
 				dy := dN.At(1, n)
 				c := 2 * n
-				B.Set(0, c, dx)     // εxx
-				B.Set(1, c+1, dy)   // εyy
-				B.Set(2, c, dy)     // γxy
-				B.Set(2, c+1, dx)   //
+				B.Set(0, c, dx)   // εxx
+				B.Set(1, c+1, dy) // εyy
+				B.Set(2, c, dy)   // γxy
+				B.Set(2, c+1, dx) //
 			}
 
 			// Ke += t · |detJ| · Bᵀ · D · B
@@ -138,11 +139,18 @@ func (q *Quad4) planeD() *mat.Dense {
 
 // ---------- Element interface ----------
 
-func (q *Quad4) GetTangentStiffness() *mat.Dense  { return q.ke }
-func (q *Quad4) GetResistingForce() *mat.VecDense { return mat.NewVecDense(8, nil) }
-func (q *Quad4) NodeIDs() []int                   { return q.Nds[:] }
-func (q *Quad4) NumDOF() int                      { return 8 }
-func (q *Quad4) DOFPerNode() int                  { return 2 }
+func (q *Quad4) GetTangentStiffness() *mat.Dense { return q.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector).
+func (q *Quad4) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(8, nil)
+	f.MulVec(q.ke, mat.NewVecDense(8, q.ue[:]))
+	return f
+}
+
+func (q *Quad4) NodeIDs() []int  { return q.Nds[:] }
+func (q *Quad4) NumDOF() int     { return 8 }
+func (q *Quad4) DOFPerNode() int { return 2 }
 func (q *Quad4) DOFTypes() []dof.Type {
 	return []dof.Type{
 		dof.UX, dof.UY,
@@ -151,6 +159,49 @@ func (q *Quad4) DOFTypes() []dof.Type {
 		dof.UX, dof.UY,
 	}
 }
-func (q *Quad4) Update(_ []float64) error { return nil }
-func (q *Quad4) CommitState() error       { return nil }
-func (q *Quad4) RevertToStart() error     { return nil }
+
+// Update stores the element displacements for post-processing.
+func (q *Quad4) Update(disp []float64) error { copy(q.ue[:], disp); return nil }
+
+func (q *Quad4) CommitState() error   { return nil }
+func (q *Quad4) RevertToStart() error { q.ue = [8]float64{}; return nil }
+
+// StressCentroid returns the in-plane stress at the element centroid (ξ=η=0)
+// as [sxx, syy, txy] = D·B·ue.
+func (q *Quad4) StressCentroid() [3]float64 {
+	ref := quad4Ref
+	X := mat.NewDense(4, 2, nil)
+	for i := 0; i < 4; i++ {
+		X.Set(i, 0, q.Coords[i][0])
+		X.Set(i, 1, q.Coords[i][1])
+	}
+	// dNnat at centroid (ξ=η=0): dNnat[0,i]=si/4, dNnat[1,i]=ei/4
+	dNnat := mat.NewDense(2, 4, nil)
+	for i := 0; i < 4; i++ {
+		dNnat.Set(0, i, ref[i][0]/4)
+		dNnat.Set(1, i, ref[i][1]/4)
+	}
+	J := mat.NewDense(2, 2, nil)
+	J.Mul(dNnat, X)
+	var Jinv mat.Dense
+	Jinv.Inverse(J)
+	dN := mat.NewDense(2, 4, nil)
+	dN.Mul(&Jinv, dNnat)
+
+	B := mat.NewDense(3, 8, nil)
+	for n := 0; n < 4; n++ {
+		dx, dy := dN.At(0, n), dN.At(1, n)
+		c := 2 * n
+		B.Set(0, c, dx)
+		B.Set(1, c+1, dy)
+		B.Set(2, c, dy)
+		B.Set(2, c+1, dx)
+	}
+
+	D := q.planeD()
+	Bu := mat.NewVecDense(3, nil)
+	Bu.MulVec(B, mat.NewVecDense(8, q.ue[:]))
+	sigma := mat.NewVecDense(3, nil)
+	sigma.MulVec(D, Bu)
+	return [3]float64{sigma.AtVec(0), sigma.AtVec(1), sigma.AtVec(2)}
+}

@@ -17,9 +17,10 @@ type Tet4 struct {
 	Coords [4][3]float64 // nodal coordinates (x, y, z)
 	Mat    material.Material3D
 
-	ke  *mat.Dense // 12×12 stiffness
-	b   *mat.Dense // 6×12 strain-displacement
-	vol float64    // element volume
+	ke  *mat.Dense  // 12×12 stiffness
+	b   *mat.Dense  // 6×12 strain-displacement
+	vol float64     // element volume
+	ue  [12]float64 // element displacements (set by Update)
 }
 
 // NewTet4 creates and initialises a 4-node tetrahedron.
@@ -111,22 +112,49 @@ func (t *Tet4) formKe() {
 
 func (t *Tet4) GetTangentStiffness() *mat.Dense { return t.ke }
 
+// GetResistingForce returns Ke·ue (internal nodal force vector).
 func (t *Tet4) GetResistingForce() *mat.VecDense {
-	// For linear analysis, not used (forces come from Ke·U).
-	return mat.NewVecDense(12, nil)
+	f := mat.NewVecDense(12, nil)
+	f.MulVec(t.ke, mat.NewVecDense(12, t.ue[:]))
+	return f
 }
 
 func (t *Tet4) NodeIDs() []int { return t.Nds[:] }
 func (t *Tet4) NumDOF() int    { return 12 }
 
-func (t *Tet4) Update(_ []float64) error { return nil }
-func (t *Tet4) DOFPerNode() int            { return 3 }
-func (t *Tet4) DOFTypes() []dof.Type       { return dof.Translational3D(4) }
-func (t *Tet4) CommitState() error         { return nil }
-func (t *Tet4) RevertToStart() error       { return nil }
+// Update stores the element displacements for post-processing.
+func (t *Tet4) Update(disp []float64) error { copy(t.ue[:], disp); return nil }
+
+func (t *Tet4) DOFPerNode() int      { return 3 }
+func (t *Tet4) DOFTypes() []dof.Type { return dof.Translational3D(4) }
+func (t *Tet4) CommitState() error   { return nil }
+func (t *Tet4) RevertToStart() error { t.ue = [12]float64{}; return nil }
 
 // Volume returns the element volume.
 func (t *Tet4) Volume() float64 { return t.vol }
 
 // B returns the strain-displacement matrix (6×12).
 func (t *Tet4) B() *mat.Dense { return t.b }
+
+// StressCentroid returns the Cauchy stress vector at the element centroid
+// in Voigt notation [sxx, syy, szz, txy, tyz, txz] = D·B·ue.
+// For Tet4 the strain (and stress) is constant throughout the element.
+func (t *Tet4) StressCentroid() [6]float64 {
+	D := t.Mat.GetTangent()
+	Bu := mat.NewVecDense(6, nil)
+	Bu.MulVec(t.b, mat.NewVecDense(12, t.ue[:]))
+	sigma := mat.NewVecDense(6, nil)
+	sigma.MulVec(D, Bu)
+	var s [6]float64
+	for i := range s {
+		s[i] = sigma.AtVec(i)
+	}
+	return s
+}
+
+// VonMises computes the von Mises equivalent stress from a Voigt stress vector
+// [sxx, syy, szz, txy, tyz, txz].
+func VonMises(s [6]float64) float64 {
+	a, b, c := s[0]-s[1], s[1]-s[2], s[2]-s[0]
+	return math.Sqrt(0.5 * (a*a + b*b + c*c + 6*(s[3]*s[3]+s[4]*s[4]+s[5]*s[5])))
+}

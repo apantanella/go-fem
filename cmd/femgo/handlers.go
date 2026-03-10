@@ -46,6 +46,7 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 			"tet4", "hexa8", "tet10", "brick20",
 			"truss3d", "corot_truss",
 			"elastic_beam3d",
+			"quad4",
 			"shell_mitc4",
 			"zerolength",
 		},

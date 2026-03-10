@@ -12,6 +12,19 @@ import (
 
 // ElasticBeam3D is a 2-node 3D Euler-Bernoulli beam element.
 // 6 DOFs per node (UX, UY, UZ, RX, RY, RZ), 12 DOFs total.
+// BeamEndForces holds the local-coordinate section forces at both ends of a beam.
+// Convention per end: [N, Vy, Vz, Mx, My, Mz] in the element local frame.
+//
+//	N  > 0 = tension
+//	Vy, Vz = shear in local y, z
+//	Mx = torsion; My, Mz = bending about local y, z
+type BeamEndForces struct {
+	I [6]float64 // forces at node i (start)
+	J [6]float64 // forces at node j (end)
+}
+
+// ElasticBeam3D is a 2-node 3D Euler-Bernoulli beam element.
+// 6 DOFs per node (UX, UY, UZ, RX, RY, RZ), 12 DOFs total.
 type ElasticBeam3D struct {
 	ID     int
 	Nds    [2]int
@@ -25,8 +38,10 @@ type ElasticBeam3D struct {
 	VecXZ [3]float64
 
 	ke     *mat.Dense
+	kl     *mat.Dense // local stiffness (before transformation) for EndForces
 	length float64
 	R      [3][3]float64 // rotation matrix: rows are local axes in global coords
+	ue     [12]float64   // element displacements in global coords (set by Update)
 }
 
 // NewElasticBeam3D creates a 3D elastic beam element.
@@ -171,22 +186,63 @@ func (b *ElasticBeam3D) formKe() {
 	tmp.Mul(kl, T)
 	b.ke = mat.NewDense(12, 12, nil)
 	b.ke.Mul(T.T(), tmp)
+
+	// Persist local stiffness for EndForces post-processing.
+	b.kl = kl
 }
 
 // ---------- Element interface ----------
 
-func (b *ElasticBeam3D) GetTangentStiffness() *mat.Dense  { return b.ke }
-func (b *ElasticBeam3D) GetResistingForce() *mat.VecDense { return mat.NewVecDense(12, nil) }
-func (b *ElasticBeam3D) NodeIDs() []int                   { return b.Nds[:] }
-func (b *ElasticBeam3D) NumDOF() int                      { return 12 }
-func (b *ElasticBeam3D) DOFPerNode() int                  { return 6 }
-func (b *ElasticBeam3D) DOFTypes() []dof.Type             { return dof.Full6D(2) }
-func (b *ElasticBeam3D) Update(_ []float64) error         { return nil }
-func (b *ElasticBeam3D) CommitState() error               { return nil }
-func (b *ElasticBeam3D) RevertToStart() error             { return nil }
+func (b *ElasticBeam3D) GetTangentStiffness() *mat.Dense { return b.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector in global coords).
+func (b *ElasticBeam3D) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(12, nil)
+	f.MulVec(b.ke, mat.NewVecDense(12, b.ue[:]))
+	return f
+}
+
+func (b *ElasticBeam3D) NodeIDs() []int       { return b.Nds[:] }
+func (b *ElasticBeam3D) NumDOF() int          { return 12 }
+func (b *ElasticBeam3D) DOFPerNode() int      { return 6 }
+func (b *ElasticBeam3D) DOFTypes() []dof.Type { return dof.Full6D(2) }
+
+// Update stores the element displacements for subsequent post-processing calls.
+func (b *ElasticBeam3D) Update(disp []float64) error {
+	copy(b.ue[:], disp)
+	return nil
+}
+
+func (b *ElasticBeam3D) CommitState() error   { return nil }
+func (b *ElasticBeam3D) RevertToStart() error { b.ue = [12]float64{}; return nil }
 
 // Length returns the beam length.
 func (b *ElasticBeam3D) Length() float64 { return b.length }
+
+// EndForces computes the section forces at both beam ends in local element coordinates.
+// Requires that Update() has been called with the global displacements first.
+func (b *ElasticBeam3D) EndForces() BeamEndForces {
+	// Transform global ue to local: each 3-component block rotated by R.
+	// u_local[3k..3k+2] = R · ue[3k..3k+2]  for k = 0..3
+	var uloc [12]float64
+	for blk := 0; blk < 4; blk++ {
+		off := 3 * blk
+		for i := 0; i < 3; i++ {
+			for j := 0; j < 3; j++ {
+				uloc[off+i] += b.R[i][j] * b.ue[off+j]
+			}
+		}
+	}
+	// f_local = kl · u_local
+	f := mat.NewVecDense(12, nil)
+	f.MulVec(b.kl, mat.NewVecDense(12, uloc[:]))
+	var ef BeamEndForces
+	for i := 0; i < 6; i++ {
+		ef.I[i] = f.AtVec(i)
+		ef.J[i] = f.AtVec(i + 6)
+	}
+	return ef
+}
 
 // ---------- Helpers ----------
 

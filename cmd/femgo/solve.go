@@ -9,6 +9,7 @@ import (
 	"go-fem/domain"
 	"go-fem/element"
 	"go-fem/element/frame"
+	"go-fem/element/quad"
 	"go-fem/element/shell"
 	"go-fem/element/solid"
 	"go-fem/element/truss"
@@ -132,6 +133,7 @@ func solveProblem(input ProblemInput) ProblemOutput {
 			Solver:      solverName,
 		},
 		Displacements: disps,
+		ElementForces: extractElementForces(dom.Elements, input.Elements),
 		Summary: &SummaryOutput{
 			MaxAbsDisplacement: MaxDispOutput{
 				Node:      maxNode,
@@ -280,6 +282,31 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		copy(c4[:], coords)
 		return shell.NewShellMITC4(eid, n4, c4, ei.E, ei.Nu, ei.Thickness), nil
 
+	case "quad4":
+		if len(ei.Nodes) != 4 {
+			return nil, fmt.Errorf("quad4 requires 4 nodes, got %d", len(ei.Nodes))
+		}
+		for _, nid := range ei.Nodes {
+			if nid < 0 || nid >= nn {
+				return nil, fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		if ei.E <= 0 || ei.Thickness <= 0 {
+			return nil, fmt.Errorf("quad4 requires E > 0 and thickness > 0")
+		}
+		var n4q [4]int
+		var c4q [4][2]float64
+		copy(n4q[:], ei.Nodes)
+		for k, nid := range ei.Nodes {
+			c4q[k][0] = dom.Nodes[nid].Coord[0]
+			c4q[k][1] = dom.Nodes[nid].Coord[1]
+		}
+		ptype := quad.PlaneStress
+		if ei.PlaneType == "strain" {
+			ptype = quad.PlaneStrain
+		}
+		return quad.NewQuad4(eid, n4q, c4q, ei.E, ei.Nu, ei.Thickness, ptype), nil
+
 	case "zerolength":
 		if len(ei.Nodes) != 2 {
 			return nil, fmt.Errorf("zerolength requires 2 nodes")
@@ -303,4 +330,53 @@ func errorResponse(format string, args ...any) ProblemOutput {
 		Success: false,
 		Error:   fmt.Sprintf(format, args...),
 	}
+}
+
+// extractElementForces builds the per-element post-processing results.
+// It uses type assertions to call element-specific methods.
+func extractElementForces(elems []element.Element, inputs []ElementInput) []ElementForcesOutput {
+	out := make([]ElementForcesOutput, len(elems))
+	for i, elem := range elems {
+		ef := ElementForcesOutput{ID: i}
+		if i < len(inputs) {
+			ef.Type = inputs[i].Type
+		}
+		switch e := elem.(type) {
+		case *truss.Truss3D:
+			N := e.AxialForce()
+			sigma := e.AxialStress()
+			ef.N = &N
+			ef.Sigma = &sigma
+		case *truss.CorotTruss:
+			N := e.AxialForce()
+			sigma := e.AxialStress()
+			ef.N = &N
+			ef.Sigma = &sigma
+		case *frame.ElasticBeam3D:
+			ef2 := e.EndForces()
+			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
+			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Vz: ef2.J[2], Mx: ef2.J[3], My: ef2.J[4], Mz: ef2.J[5]}
+		case *solid.Tet4:
+			s := e.StressCentroid()
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+		case *solid.Hexa8:
+			s := e.StressCentroid()
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+		case *solid.Tet10:
+			s := e.StressCentroid()
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+		case *solid.Brick20:
+			s := e.StressCentroid()
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+		case *quad.Quad4:
+			s := e.StressCentroid()
+			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+		case *shell.ShellMITC4:
+			sf := e.LocalForces()
+			ef.ShellForces = &ShellForcesOutput{Nx: sf.Nx, Ny: sf.Ny, Nxy: sf.Nxy, Mx: sf.Mx, My: sf.My, Mxy: sf.Mxy}
+		}
+		out[i] = ef
+	}
+	return out
 }

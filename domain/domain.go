@@ -171,3 +171,21 @@ func (d *Domain) SetDisplacements(U *mat.VecDense) [][6]float64 {
 	}
 	return disp
 }
+
+// ElementDisp extracts the displacement vector for a single element from the
+// global solution U, using the same DOF-type mapping as Assemble().
+// Must be called after Assemble() has set DOFPerNode.
+func (d *Domain) ElementDisp(elem element.Element, U *mat.VecDense) []float64 {
+	dpn := d.DOFPerNode
+	nids := elem.NodeIDs()
+	dofTypes := elem.DOFTypes()
+	eldof := elem.NumDOF()
+	elemDPN := elem.DOFPerNode()
+	disp := make([]float64, eldof)
+	for i, dt := range dofTypes {
+		nodeIdx := i / elemDPN
+		nodeID := nids[nodeIdx]
+		disp[i] = U.AtVec(nodeID*dpn + int(dt))
+	}
+	return disp
+}

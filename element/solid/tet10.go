@@ -19,6 +19,7 @@ type Tet10 struct {
 	Mat    material.Material3D
 
 	ke *mat.Dense
+	ue [30]float64 // element displacements (set by Update)
 }
 
 // NewTet10 creates a 10-node quadratic tetrahedron.
@@ -163,12 +164,99 @@ func (t *Tet10) formKe() {
 
 // ---------- Element interface ----------
 
-func (t *Tet10) GetTangentStiffness() *mat.Dense  { return t.ke }
-func (t *Tet10) GetResistingForce() *mat.VecDense { return mat.NewVecDense(30, nil) }
-func (t *Tet10) NodeIDs() []int                   { return t.Nds[:] }
-func (t *Tet10) NumDOF() int                      { return 30 }
-func (t *Tet10) DOFPerNode() int                  { return 3 }
-func (t *Tet10) DOFTypes() []dof.Type             { return dof.Translational3D(10) }
-func (t *Tet10) Update(_ []float64) error         { return nil }
-func (t *Tet10) CommitState() error               { return nil }
-func (t *Tet10) RevertToStart() error             { return nil }
+func (t *Tet10) GetTangentStiffness() *mat.Dense { return t.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector).
+func (t *Tet10) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(30, nil)
+	f.MulVec(t.ke, mat.NewVecDense(30, t.ue[:]))
+	return f
+}
+
+func (t *Tet10) NodeIDs() []int       { return t.Nds[:] }
+func (t *Tet10) NumDOF() int          { return 30 }
+func (t *Tet10) DOFPerNode() int      { return 3 }
+func (t *Tet10) DOFTypes() []dof.Type { return dof.Translational3D(10) }
+
+// Update stores the element displacements for post-processing.
+func (t *Tet10) Update(disp []float64) error { copy(t.ue[:], disp); return nil }
+
+func (t *Tet10) CommitState() error   { return nil }
+func (t *Tet10) RevertToStart() error { t.ue = [30]float64{}; return nil }
+
+// StressCentroid returns the Cauchy stress at the element centroid (L1=L2=L3=L4=1/4)
+// in Voigt notation [sxx, syy, szz, txy, tyz, txz].
+func (t *Tet10) StressCentroid() [6]float64 {
+	const ndof = 30
+	D := t.Mat.GetTangent()
+
+	xi, eta, zeta := 0.25, 0.25, 0.25
+	L1 := 1 - xi - eta - zeta // = 0.25
+	L2, L3, L4 := xi, eta, zeta
+
+	dNnat := mat.NewDense(3, 10, nil)
+	// Corner nodes (all zero at centroid since 4Li-1=0)
+	_ = L1
+	_ = L2
+	_ = L3
+	_ = L4
+	// Midside node 4 (L1-L2):  dN/dξ=4(L1-L2), dN/dη=-4L2, dN/dζ=-4L2
+	dNnat.Set(0, 4, 4*(L1-L2))
+	dNnat.Set(1, 4, -4*L2)
+	dNnat.Set(2, 4, -4*L2)
+	// Midside node 5 (L2-L3):  dN/dξ=4L3, dN/dη=4L2
+	dNnat.Set(0, 5, 4*L3)
+	dNnat.Set(1, 5, 4*L2)
+	// Midside node 6 (L1-L3):  dN/dξ=-4L3, dN/dη=4(L1-L3), dN/dζ=-4L3
+	dNnat.Set(0, 6, -4*L3)
+	dNnat.Set(1, 6, 4*(L1-L3))
+	dNnat.Set(2, 6, -4*L3)
+	// Midside node 7 (L1-L4):  dN/dξ=-4L4, dN/dη=-4L4, dN/dζ=4(L1-L4)
+	dNnat.Set(0, 7, -4*L4)
+	dNnat.Set(1, 7, -4*L4)
+	dNnat.Set(2, 7, 4*(L1-L4))
+	// Midside node 8 (L2-L4):  dN/dξ=4L4, dN/dζ=4L2
+	dNnat.Set(0, 8, 4*L4)
+	dNnat.Set(2, 8, 4*L2)
+	// Midside node 9 (L3-L4):  dN/dη=4L4, dN/dζ=4L3
+	dNnat.Set(1, 9, 4*L4)
+	dNnat.Set(2, 9, 4*L3)
+
+	X := mat.NewDense(10, 3, nil)
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, t.Coords[i][j])
+		}
+	}
+	J := mat.NewDense(3, 3, nil)
+	J.Mul(dNnat, X)
+	var Jinv mat.Dense
+	Jinv.Inverse(J)
+	dN := mat.NewDense(3, 10, nil)
+	dN.Mul(&Jinv, dNnat)
+
+	B := mat.NewDense(6, ndof, nil)
+	for n := 0; n < 10; n++ {
+		dx, dy, dz := dN.At(0, n), dN.At(1, n), dN.At(2, n)
+		c := 3 * n
+		B.Set(0, c, dx)
+		B.Set(1, c+1, dy)
+		B.Set(2, c+2, dz)
+		B.Set(3, c, dy)
+		B.Set(3, c+1, dx)
+		B.Set(4, c+1, dz)
+		B.Set(4, c+2, dy)
+		B.Set(5, c, dz)
+		B.Set(5, c+2, dx)
+	}
+
+	Bu := mat.NewVecDense(6, nil)
+	Bu.MulVec(B, mat.NewVecDense(ndof, t.ue[:]))
+	sigma := mat.NewVecDense(6, nil)
+	sigma.MulVec(D, Bu)
+	var s [6]float64
+	for i := range s {
+		s[i] = sigma.AtVec(i)
+	}
+	return s
+}

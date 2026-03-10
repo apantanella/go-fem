@@ -33,5 +33,11 @@ func (a *StaticLinearAnalysis) Run() (*mat.VecDense, error) {
 		return nil, fmt.Errorf("analysis: %w", err)
 	}
 
+	// 4. Update each element with its displacements for post-processing.
+	for _, elem := range a.Dom.Elements {
+		ue := a.Dom.ElementDisp(elem, U)
+		elem.Update(ue)
+	}
+
 	return U, nil
 }

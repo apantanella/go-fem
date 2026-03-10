@@ -367,6 +367,9 @@ go run ./validation
 | Beam – cantilever tip deflection | `ElasticBeam3D` | 3.333e-01 | 3.333e-01 | 0.00e+00 | PASS ✓ |
 | Beam – simply-supported midspan | `ElasticBeam3D` | 1.667e-01 | 1.667e-01 | 0.00e+00 | PASS ✓ |
 | Hexa8 – uniaxial patch test | `Hexa8` | 1.000e+00 | 1.000e+00 | 0.00e+00 | PASS ✓ |
+| Truss – `AxialForce()` post-processing | `Truss3D` | 1.000e+04 | 1.000e+04 | 0.00e+00 | PASS ✓ |
+| Beam – `EndForces()` Mz at support | `ElasticBeam3D` | 1.000e+00 | 1.000e+00 | 0.00e+00 | PASS ✓ |
+| Hexa8 – `StressCentroid()` σxx | `Hexa8` | 1.000e+00 | 1.000e+00 | 1.11e-14 | PASS ✓ |
 
 ### Case descriptions
 
@@ -376,6 +379,9 @@ go run ./validation
 | Cantilever tip deflection | $\delta_y = \frac{FL^3}{3EI_z}$ | $F=1,\ L=1,\ E=1,\ I_z=1$ |
 | Simply-supported midspan | $\delta_{\text{mid}} = \frac{FL^3}{48EI_z}$ | $F=1,\ L=2,\ E=1,\ I_z=1$ |
 | Hexa8 uniaxial patch test | $u_x = \frac{\sigma_x}{E}\cdot L = 1$ | Unit cube, $E=1,\ \nu=0,\ F=1$ distributed over $x=1$ face |
+| Truss `AxialForce()` | $N = \frac{EA}{L}\Delta u_{axial} = F$ | Same as truss deformation case |
+| Beam `EndForces()` Mz | $M_z^{(i)} = F \cdot L$ | Cantilever, $F=1,\ L=1$ |
+| Hexa8 `StressCentroid()` | $\sigma_{xx} = F/A = 1$ | Same as uniaxial patch case |
 
 ---
 

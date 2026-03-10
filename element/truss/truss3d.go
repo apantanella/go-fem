@@ -21,6 +21,7 @@ type Truss3D struct {
 	ke     *mat.Dense
 	length float64
 	cos    [3]float64 // direction cosines
+	ue     [6]float64 // element displacements (set by Update)
 }
 
 // NewTruss3D creates a 3D truss element.
@@ -64,15 +65,37 @@ func (t *Truss3D) formKe() {
 
 // ---------- Element interface ----------
 
-func (t *Truss3D) GetTangentStiffness() *mat.Dense  { return t.ke }
-func (t *Truss3D) GetResistingForce() *mat.VecDense  { return mat.NewVecDense(6, nil) }
-func (t *Truss3D) NodeIDs() []int                    { return t.Nds[:] }
-func (t *Truss3D) NumDOF() int                       { return 6 }
-func (t *Truss3D) DOFPerNode() int                   { return 3 }
-func (t *Truss3D) DOFTypes() []dof.Type              { return dof.Translational3D(2) }
-func (t *Truss3D) Update(_ []float64) error          { return nil }
-func (t *Truss3D) CommitState() error                { return nil }
-func (t *Truss3D) RevertToStart() error              { return nil }
+func (t *Truss3D) GetTangentStiffness() *mat.Dense { return t.ke }
+
+// GetResistingForce returns Ke·ue (internal nodal force vector in global coords).
+func (t *Truss3D) GetResistingForce() *mat.VecDense {
+	f := mat.NewVecDense(6, nil)
+	f.MulVec(t.ke, mat.NewVecDense(6, t.ue[:]))
+	return f
+}
+
+func (t *Truss3D) NodeIDs() []int       { return t.Nds[:] }
+func (t *Truss3D) NumDOF() int          { return 6 }
+func (t *Truss3D) DOFPerNode() int      { return 3 }
+func (t *Truss3D) DOFTypes() []dof.Type { return dof.Translational3D(2) }
+
+// Update stores the element displacements for subsequent post-processing calls.
+func (t *Truss3D) Update(disp []float64) error {
+	copy(t.ue[:], disp)
+	return nil
+}
+
+func (t *Truss3D) CommitState() error   { return nil }
+func (t *Truss3D) RevertToStart() error { t.ue = [6]float64{}; return nil }
 
 // Length returns the element length.
 func (t *Truss3D) Length() float64 { return t.length }
+
+// AxialForce returns the axial force N = EA/L · Δu_axial (positive = tension).
+func (t *Truss3D) AxialForce() float64 {
+	du := [3]float64{t.ue[3] - t.ue[0], t.ue[4] - t.ue[1], t.ue[5] - t.ue[2]}
+	return t.E * t.A / t.length * (t.cos[0]*du[0] + t.cos[1]*du[1] + t.cos[2]*du[2])
+}
+
+// AxialStress returns the axial normal stress σ = N/A.
+func (t *Truss3D) AxialStress() float64 { return t.AxialForce() / t.A }

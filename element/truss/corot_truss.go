@@ -131,3 +131,9 @@ func (t *CorotTruss) RevertToStart() error {
 	t.re = mat.NewVecDense(6, nil)
 	return nil
 }
+
+// AxialForce returns the current axial force N = A·σ (positive = tension).
+func (t *CorotTruss) AxialForce() float64 { return t.A * t.stress }
+
+// AxialStress returns the current axial stress σ (positive = tension).
+func (t *CorotTruss) AxialStress() float64 { return t.stress }

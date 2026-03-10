@@ -29,7 +29,8 @@ type Hexa8 struct {
 	Coords [8][3]float64 // nodal coordinates
 	Mat    material.Material3D
 
-	ke *mat.Dense // 24×24 stiffness
+	ke *mat.Dense  // 24×24 stiffness
+	ue [24]float64 // element displacements (set by Update)
 }
 
 // NewHexa8 creates and initialises an 8-node hexahedron.
@@ -125,15 +126,73 @@ func (h *Hexa8) formKe() {
 
 func (h *Hexa8) GetTangentStiffness() *mat.Dense { return h.ke }
 
+// GetResistingForce returns Ke·ue (internal nodal force vector).
 func (h *Hexa8) GetResistingForce() *mat.VecDense {
-	return mat.NewVecDense(24, nil)
+	f := mat.NewVecDense(24, nil)
+	f.MulVec(h.ke, mat.NewVecDense(24, h.ue[:]))
+	return f
 }
 
 func (h *Hexa8) NodeIDs() []int { return h.Nds[:] }
 func (h *Hexa8) NumDOF() int    { return 24 }
 
-func (h *Hexa8) Update(_ []float64) error { return nil }
-func (h *Hexa8) DOFPerNode() int            { return 3 }
-func (h *Hexa8) DOFTypes() []dof.Type       { return dof.Translational3D(8) }
-func (h *Hexa8) CommitState() error         { return nil }
-func (h *Hexa8) RevertToStart() error       { return nil }
+// Update stores the element displacements for post-processing.
+func (h *Hexa8) Update(disp []float64) error { copy(h.ue[:], disp); return nil }
+
+func (h *Hexa8) DOFPerNode() int      { return 3 }
+func (h *Hexa8) DOFTypes() []dof.Type { return dof.Translational3D(8) }
+func (h *Hexa8) CommitState() error   { return nil }
+func (h *Hexa8) RevertToStart() error { h.ue = [24]float64{}; return nil }
+
+// StressCentroid returns the Cauchy stress at the element centroid (ξ=η=ζ=0)
+// in Voigt notation [sxx, syy, szz, txy, tyz, txz].
+func (h *Hexa8) StressCentroid() [6]float64 {
+	const ndof = 24
+	D := h.Mat.GetTangent()
+
+	// B matrix at centroid (ξ=η=ζ=0):
+	// dNnat[0,i]=si/8, dNnat[1,i]=ei/8, dNnat[2,i]=zi/8
+	dNnat := mat.NewDense(3, 8, nil)
+	for i := 0; i < 8; i++ {
+		dNnat.Set(0, i, hex8Ref[i][0]/8)
+		dNnat.Set(1, i, hex8Ref[i][1]/8)
+		dNnat.Set(2, i, hex8Ref[i][2]/8)
+	}
+	X := mat.NewDense(8, 3, nil)
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, h.Coords[i][j])
+		}
+	}
+	J := mat.NewDense(3, 3, nil)
+	J.Mul(dNnat, X)
+	var Jinv mat.Dense
+	Jinv.Inverse(J)
+	dN := mat.NewDense(3, 8, nil)
+	dN.Mul(&Jinv, dNnat)
+
+	B := mat.NewDense(6, ndof, nil)
+	for n := 0; n < 8; n++ {
+		dx, dy, dz := dN.At(0, n), dN.At(1, n), dN.At(2, n)
+		c := 3 * n
+		B.Set(0, c, dx)
+		B.Set(1, c+1, dy)
+		B.Set(2, c+2, dz)
+		B.Set(3, c, dy)
+		B.Set(3, c+1, dx)
+		B.Set(4, c+1, dz)
+		B.Set(4, c+2, dy)
+		B.Set(5, c, dz)
+		B.Set(5, c+2, dx)
+	}
+
+	Bu := mat.NewVecDense(6, nil)
+	Bu.MulVec(B, mat.NewVecDense(ndof, h.ue[:]))
+	sigma := mat.NewVecDense(6, nil)
+	sigma.MulVec(D, Bu)
+	var s [6]float64
+	for i := range s {
+		s[i] = sigma.AtVec(i)
+	}
+	return s
+}
