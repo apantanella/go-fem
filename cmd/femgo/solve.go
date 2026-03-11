@@ -30,6 +30,16 @@ func solveProblem(input ProblemInput) ProblemOutput {
 		switch mi.Type {
 		case "isotropic_linear":
 			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		case "orthotropic_linear":
+			m, err := material.NewOrthotropicLinear(
+				mi.Ex, mi.Ey, mi.Ez,
+				mi.Nxy, mi.Nyz, mi.Nxz,
+				mi.Gxy, mi.Gyz, mi.Gxz,
+			)
+			if err != nil {
+				return errorResponse("material %q: %v", mi.ID, err)
+			}
+			mats[mi.ID] = m
 		default:
 			return errorResponse("unknown material type: %s", mi.Type)
 		}

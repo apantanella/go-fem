@@ -15,9 +15,22 @@ type ProblemInput struct {
 
 type MaterialInput struct {
 	ID   string  `json:"id"`
-	Type string  `json:"type"` // "isotropic_linear"
-	E    float64 `json:"E"`
-	Nu   float64 `json:"nu"`
+	Type string  `json:"type"` // "isotropic_linear" | "orthotropic_linear"
+
+	// Isotropic parameters
+	E  float64 `json:"E,omitempty"`
+	Nu float64 `json:"nu,omitempty"`
+
+	// Orthotropic parameters (all required for orthotropic_linear)
+	Ex  float64 `json:"Ex,omitempty"`
+	Ey  float64 `json:"Ey,omitempty"`
+	Ez  float64 `json:"Ez,omitempty"`
+	Nxy float64 `json:"nxy,omitempty"` // Poisson's ratio ν_xy (loading x, lateral y)
+	Nyz float64 `json:"nyz,omitempty"` // ν_yz
+	Nxz float64 `json:"nxz,omitempty"` // ν_xz
+	Gxy float64 `json:"Gxy,omitempty"`
+	Gyz float64 `json:"Gyz,omitempty"`
+	Gxz float64 `json:"Gxz,omitempty"`
 }
 
 type ElementInput struct {

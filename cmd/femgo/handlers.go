@@ -50,7 +50,7 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 			"shell_mitc4",
 			"zerolength",
 		},
-		"materials": []string{"isotropic_linear"},
+		"materials": []string{"isotropic_linear", "orthotropic_linear"},
 		"solvers":   []string{"cholesky", "lu"},
 		"endpoints": map[string]string{
 			"POST /solve": "Submit a FEM problem (JSON) and get displacement results",
