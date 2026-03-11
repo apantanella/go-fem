@@ -362,6 +362,31 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		}
 		return quad.NewQuad4(eid, n4q, c4q, ei.E, ei.Nu, ei.Thickness, ptype), nil
 
+	case "quad8":
+		if len(ei.Nodes) != 8 {
+			return nil, fmt.Errorf("quad8 requires 8 nodes, got %d", len(ei.Nodes))
+		}
+		for _, nid := range ei.Nodes {
+			if nid < 0 || nid >= nn {
+				return nil, fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		if ei.E <= 0 || ei.Thickness <= 0 {
+			return nil, fmt.Errorf("quad8 requires E > 0 and thickness > 0")
+		}
+		var n8q [8]int
+		var c8q [8][2]float64
+		copy(n8q[:], ei.Nodes)
+		for k, nid := range ei.Nodes {
+			c8q[k][0] = dom.Nodes[nid].Coord[0]
+			c8q[k][1] = dom.Nodes[nid].Coord[1]
+		}
+		ptype8 := quad.PlaneStress
+		if ei.PlaneType == "strain" {
+			ptype8 = quad.PlaneStrain
+		}
+		return quad.NewQuad8(eid, n8q, c8q, ei.E, ei.Nu, ei.Thickness, ptype8), nil
+
 	case "zerolength":
 		if len(ei.Nodes) != 2 {
 			return nil, fmt.Errorf("zerolength requires 2 nodes")
@@ -428,6 +453,10 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			s := e.StressCentroid()
 			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
 		case *quad.Quad4:
+			s := e.StressCentroid()
+			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+		case *quad.Quad8:
 			s := e.StressCentroid()
 			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
 			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
