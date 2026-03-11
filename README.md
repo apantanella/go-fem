@@ -103,6 +103,7 @@ type Element interface {
 | `element/frame/` | `TimoshenkoBeam3D` | 2 | 12 | Analytical | Timoshenko 3D beam — shear-deformable (6 DOF/node) |
 | `element/quad/` | `Quad4` | 4 | 8 | 2×2 Gauss | Plane stress or plane strain |
 | `element/shell/` | `ShellMITC4` | 4 | 24 | 2×2 + SRI | Flat shell: membrane + bending, 6 DOF/node |
+| `element/shell/` | `DKT3` | 3 | 18 | Triangular (area-constant) | Thin plate bending (Discrete Kirchhoff style), active DOFs: UZ/RX/RY |
 
 ### Connector Elements
 
@@ -332,6 +333,7 @@ On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
 | `"elastic_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | — |
 | `"timoshenko_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | `Asy`, `Asz` |
 | `"shell_mitc4"` | 4 | `E`, `nu`, `thickness` | — |
+| `"dkt3"` | 3 | `E`, `nu`, `thickness` | alias: `"discrete_kirchhoff_triangle"` |
 | `"zerolength"` | 2 | `springs` (array of 6 stiffnesses: kUX..kRZ) | — |
 
 Solid elements (`tet4`, `hexa8`, `tet10`, `brick20`) require a `"material"` string referencing an entry in `"materials"`.

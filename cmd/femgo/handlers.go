@@ -47,7 +47,7 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 			"truss3d", "corot_truss",
 			"elastic_beam3d",
 			"quad4",
-			"shell_mitc4",
+			"shell_mitc4", "dkt3",
 			"zerolength",
 		},
 		"materials": []string{"isotropic_linear", "orthotropic_linear"},

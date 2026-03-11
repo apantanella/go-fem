@@ -14,8 +14,8 @@ type ProblemInput struct {
 }
 
 type MaterialInput struct {
-	ID   string  `json:"id"`
-	Type string  `json:"type"` // "isotropic_linear" | "orthotropic_linear"
+	ID   string `json:"id"`
+	Type string `json:"type"` // "isotropic_linear" | "orthotropic_linear"
 
 	// Isotropic parameters
 	E  float64 `json:"E,omitempty"`
@@ -34,7 +34,7 @@ type MaterialInput struct {
 }
 
 type ElementInput struct {
-	Type     string `json:"type"`     // element type (see below)
+	Type     string `json:"type"`     // element type (e.g. tet4, hexa8, shell_mitc4, dkt3)
 	Material string `json:"material"` // material id (for solid elements)
 	Nodes    []int  `json:"nodes"`
 

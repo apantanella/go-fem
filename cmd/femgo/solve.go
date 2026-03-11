@@ -337,6 +337,20 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		copy(c4[:], coords)
 		return shell.NewShellMITC4(eid, n4, c4, ei.E, ei.Nu, ei.Thickness), nil
 
+	case "dkt3", "discrete_kirchhoff_triangle":
+		nids, coords, err := getCoords3(ei.Nodes, 3)
+		if err != nil {
+			return nil, err
+		}
+		if ei.E <= 0 || ei.Thickness <= 0 {
+			return nil, fmt.Errorf("dkt3 requires E > 0 and thickness > 0")
+		}
+		var n3 [3]int
+		var c3 [3][3]float64
+		copy(n3[:], nids)
+		copy(c3[:], coords)
+		return shell.NewDiscreteKirchhoffTriangle(eid, n3, c3, ei.E, ei.Nu, ei.Thickness), nil
+
 	case "quad4":
 		if len(ei.Nodes) != 4 {
 			return nil, fmt.Errorf("quad4 requires 4 nodes, got %d", len(ei.Nodes))
@@ -463,6 +477,9 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 		case *shell.ShellMITC4:
 			sf := e.LocalForces()
 			ef.ShellForces = &ShellForcesOutput{Nx: sf.Nx, Ny: sf.Ny, Nxy: sf.Nxy, Mx: sf.Mx, My: sf.My, Mxy: sf.Mxy}
+		case *shell.DiscreteKirchhoffTriangle:
+			mx, my, mxy := e.LocalMoments()
+			ef.ShellForces = &ShellForcesOutput{Mx: mx, My: my, Mxy: mxy}
 		}
 		out[i] = ef
 	}
