@@ -1,0 +1,27 @@
+{
+  "_units": "N, mm, MPa — consistent SI-derived system.",
+  "_problem": "Single DKT3 triangular thin plate using alias element type discrete_kirchhoff_triangle.",
+  "materials": [],
+  "nodes": [
+    [0, 0, 0],
+    [200, 0, 0],
+    [0, 200, 0]
+  ],
+  "elements": [
+    {
+      "type": "discrete_kirchhoff_triangle",
+      "nodes": [0, 1, 2],
+      "E": 210000,
+      "nu": 0.3,
+      "thickness": 10
+    }
+  ],
+  "boundary_conditions": [
+    {"node": 0, "dofs": [0, 1, 2, 3, 4, 5]},
+    {"node": 1, "dofs": [0, 1, 2, 3, 4, 5]}
+  ],
+  "loads": [
+    {"type": "nodal", "node": 2, "dof": 2, "value": -1000}
+  ],
+  "solver": "lu"
+}
