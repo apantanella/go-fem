@@ -88,8 +88,8 @@ type Element interface {
 
 | Package | Type | Nodes | DOFs | Integration | Notes |
 |---------|------|-------|------|-------------|-------|
-| `element/` | `Tet4` | 4 | 12 | 1-pt (exact) | Linear tetrahedron, constant strain |
-| `element/` | `Hexa8` | 8 | 24 | 2×2×2 Gauss | Trilinear hexahedron |
+| `element/solid/` | `Tet4` | 4 | 12 | 1-pt (exact) | Linear tetrahedron, constant strain |
+| `element/solid/` | `Hexa8` | 8 | 24 | 2×2×2 Gauss | Trilinear hexahedron |
 | `element/solid/` | `Tet10` | 10 | 30 | 4-pt tet | Quadratic tetrahedron |
 | `element/solid/` | `Brick20` | 20 | 60 | 3×3×3 Gauss | Serendipity hexahedron |
 
