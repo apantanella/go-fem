@@ -1,31 +1,33 @@
 {
+  "_units": "N, mm, MPa (N/mm²) — consistent SI-derived system. E=210000 MPa = steel.",
   "materials": [],
   "nodes": [
-    [0, 0, 0],
-    [0, 3, 0],
-    [6, 3, 0],
-    [6, 0, 0]
+    [   0,    0, 0],
+    [   0, 3000, 0],
+    [6000, 3000, 0],
+    [6000,    0, 0]
   ],
   "elements": [
     {
       "type": "elastic_beam3d",
       "nodes": [0, 1],
-      "E": 200000, "G": 80000,
-      "A": 0.01, "Iy": 8.33e-6, "Iz": 8.33e-6, "J": 1.41e-5,
-      "vec_xz": [0, 0, 1]
+      "E": 210000, "G": 80769,
+      "A": 10000, "Iy": 8333333, "Iz": 8333333, "J": 14062500,
+      "vec_xz": [0, 0, 1],
+      "_section": "100×100 mm square solid"
     },
     {
       "type": "elastic_beam3d",
       "nodes": [1, 2],
-      "E": 200000, "G": 80000,
-      "A": 0.01, "Iy": 8.33e-6, "Iz": 8.33e-6, "J": 1.41e-5,
+      "E": 210000, "G": 80769,
+      "A": 10000, "Iy": 8333333, "Iz": 8333333, "J": 14062500,
       "vec_xz": [0, 0, 1]
     },
     {
       "type": "elastic_beam3d",
       "nodes": [3, 2],
-      "E": 200000, "G": 80000,
-      "A": 0.01, "Iy": 8.33e-6, "Iz": 8.33e-6, "J": 1.41e-5,
+      "E": 210000, "G": 80769,
+      "A": 10000, "Iy": 8333333, "Iz": 8333333, "J": 14062500,
       "vec_xz": [0, 0, 1]
     }
   ],
@@ -34,7 +36,8 @@
     {"node": 3, "dofs": [0,1,2,3,4,5]}
   ],
   "loads": [
-    {"node": 1, "dof": 0, "value": 1000}
+    {"node": 1, "dof": 0, "value": 10000}
   ],
-  "solver": "lu"
+  "solver": "lu",
+  "_problem": "Portal frame: columns H=3000 mm, beam L=6000 mm, fixed bases, lateral load 10 kN. Expected sway ≈ 6–7 mm."
 }
