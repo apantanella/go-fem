@@ -41,15 +41,27 @@ Support packages:
 
 ## Layer 1 – Materials
 
-All materials implement `material.Material3D`, which returns a 6×6 constitutive matrix (`C`).
+All materials implement `material.Material3D`, which exposes a 6×6 constitutive matrix D (stiffness) and stress computation via `SetTrialStrain` / `GetStress`.
 
-| Type | Package | Parameters | Description |
-|------|---------|------------|-------------|
-| `IsotropicLinear` | `material/` | `E`, `ν` | 3D linear elastic isotropic |
+| Type | JSON `"type"` | Parameters | Description |
+|------|--------------|------------|-------------|
+| `IsotropicLinear` | `"isotropic_linear"` | `E`, `ν` | 3D linear elastic isotropic |
+| `OrthotropicLinear` | `"orthotropic_linear"` | `Ex/Ey/Ez`, `νxy/νyz/νxz`, `Gxy/Gyz/Gxz` | 3D linear elastic orthotropic (9 constants) |
 
 ```go
-mat := material.NewIsotropicLinear(200000.0, 0.3) // E=200 GPa, ν=0.3
+// Isotropic
+iso := material.NewIsotropicLinear(200000.0, 0.3)
+
+// Orthotropic — D = S⁻¹ where S is the compliance matrix
+ortho, err := material.NewOrthotropicLinear(
+    12000, 500, 800,    // Ex, Ey, Ez
+    0.40, 0.30, 0.35,  // Nxy, Nyz, Nxz
+    700, 60, 900,       // Gxy, Gyz, Gxz
+)
 ```
+
+**Maxwell reciprocity** is enforced automatically: `ν_yx = ν_xy · Ey/Ex`, etc.
+The stiffness matrix D is obtained by inverting the 6×6 compliance matrix S; an error is returned if S is singular (invalid parameter combination).
 
 ---
 
@@ -291,6 +303,20 @@ All load types use a `"type"` discriminator field. Omitting `"type"` is equivale
 
 On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
 
+### Material types in JSON
+
+| `"type"` | Required fields | Description |
+|----------|----------------|-------------|
+| `"isotropic_linear"` | `E`, `nu` | Isotropic linear elastic |
+| `"orthotropic_linear"` | `Ex`, `Ey`, `Ez`, `nxy`, `nyz`, `nxz`, `Gxy`, `Gyz`, `Gxz` | Orthotropic linear elastic (9 constants) |
+
+```json
+{"id": "timber", "type": "orthotropic_linear",
+ "Ex": 12000, "Ey": 500,  "Ez": 800,
+ "nxy": 0.40, "nyz": 0.30, "nxz": 0.35,
+ "Gxy": 700,  "Gyz": 60,  "Gxz": 900}
+```
+
 ### Element types in JSON
 
 | `"type"` | Nodes | Required fields | Optional |
@@ -344,6 +370,7 @@ curl -X POST http://localhost:8080/solve \
 | `examples/beam_with_dist_load/` | `ElasticBeam3D` | `beam_dist` | Two-span beam with UDL 1 kN/m, fixed ends |
 | `examples/pressure_on_cube/` | `Hexa8` | `surface_pressure` | Steel cube with uniform pressure on top face |
 | `examples/gravity_solid/` | `Hexa8` | `body_force` | Concrete cube under self-weight (gravity) |
+| `examples/ortho_cube/` | `Hexa8` | Nodal | Timber cube (orthotropic) under axial compression along grain |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
