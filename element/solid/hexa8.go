@@ -144,6 +144,51 @@ func (h *Hexa8) DOFTypes() []dof.Type { return dof.Translational3D(8) }
 func (h *Hexa8) CommitState() error   { return nil }
 func (h *Hexa8) RevertToStart() error { h.ue = [24]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// using 2×2×2 Gauss integration: f_i = ρ · ∫ N_i · g · dV.
+func (h *Hexa8) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(24, nil)
+
+	gp := 1.0 / math.Sqrt(3.0)
+	pts := [2]float64{-gp, gp}
+
+	X := mat.NewDense(8, 3, nil)
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, h.Coords[i][j])
+		}
+	}
+	dNnat := mat.NewDense(3, 8, nil)
+	J := mat.NewDense(3, 3, nil)
+
+	for _, xi := range pts {
+		for _, eta := range pts {
+			for _, zeta := range pts {
+				var N [8]float64
+				for i := 0; i < 8; i++ {
+					si := hex8Ref[i][0]
+					ei := hex8Ref[i][1]
+					zi := hex8Ref[i][2]
+					N[i] = (1 + si*xi) * (1 + ei*eta) * (1 + zi*zeta) / 8
+					dNnat.Set(0, i, si*(1+ei*eta)*(1+zi*zeta)/8)
+					dNnat.Set(1, i, (1+si*xi)*ei*(1+zi*zeta)/8)
+					dNnat.Set(2, i, (1+si*xi)*(1+ei*eta)*zi/8)
+				}
+				J.Mul(dNnat, X)
+				detJ := math.Abs(mat.Det(J)) // weight = 1 for 2-pt Gauss
+
+				scale := rho * detJ
+				for n := 0; n < 8; n++ {
+					f.SetVec(3*n, f.AtVec(3*n)+scale*N[n]*g[0])
+					f.SetVec(3*n+1, f.AtVec(3*n+1)+scale*N[n]*g[1])
+					f.SetVec(3*n+2, f.AtVec(3*n+2)+scale*N[n]*g[2])
+				}
+			}
+		}
+	}
+	return f
+}
+
 // StressCentroid returns the Cauchy stress at the element centroid (ξ=η=ζ=0)
 // in Voigt notation [sxx, syy, szz, txy, tyz, txz].
 func (h *Hexa8) StressCentroid() [6]float64 {

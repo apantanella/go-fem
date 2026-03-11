@@ -46,14 +46,41 @@ type ElementInput struct {
 }
 
 type BCInput struct {
-	Node int   `json:"node"`
-	DOFs []int `json:"dofs"` // e.g. [0,1,2] for translations, [0,1,2,3,4,5] for all
+	Node   int       `json:"node"`
+	DOFs   []int     `json:"dofs"`             // e.g. [0,1,2] for translations, [0,1,2,3,4,5] for all
+	Values []float64 `json:"values,omitempty"` // prescribed displacements (default 0); len must match DOFs if provided
 }
 
+// LoadInput covers all load types via a "type" discriminator.
+// For nodal loads, omit "type" or set it to "nodal".
+//
+// Load types:
+//
+//	nodal          – concentrated force/moment on a node (node, dof, value)
+//	surface_pressure – uniform pressure on a 4-node face (face_nodes[4], pressure)
+//	beam_dist      – UDL on a beam element (element, dir[3], intensity)
+//	body_force     – gravity/body force on a solid element (element, rho, g[3])
 type LoadInput struct {
-	Node  int     `json:"node"`
-	DOF   int     `json:"dof"` // 0=UX,1=UY,2=UZ,3=RX,4=RY,5=RZ
-	Value float64 `json:"value"`
+	// Nodal load fields
+	Node  int     `json:"node,omitempty"`
+	DOF   int     `json:"dof,omitempty"` // 0=UX,1=UY,2=UZ,3=RX,4=RY,5=RZ
+	Value float64 `json:"value,omitempty"`
+
+	// Load type discriminator (omit or "nodal" for concentrated nodal loads)
+	Type string `json:"type,omitempty"` // "nodal"|"surface_pressure"|"beam_dist"|"body_force"
+
+	// Surface pressure
+	FaceNodes [4]int  `json:"face_nodes,omitempty"` // global node IDs (CCW from outside)
+	Pressure  float64 `json:"pressure,omitempty"`
+
+	// Beam distributed load
+	Element   int        `json:"element,omitempty"`   // element index
+	Dir       [3]float64 `json:"dir,omitempty"`       // global direction unit vector
+	Intensity float64    `json:"intensity,omitempty"` // load per unit length
+
+	// Body force
+	Rho float64    `json:"rho,omitempty"` // mass density
+	G   [3]float64 `json:"g,omitempty"`   // gravitational acceleration vector
 }
 
 // ---------------------------------------------------------------------------

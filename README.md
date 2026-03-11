@@ -12,6 +12,8 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 - Automatic DOF detection (3 or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
 - Cholesky and LU linear solvers
+- Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
+- Non-zero prescribed displacements (imposed settlement)
 - JSON HTTP API for language-agnostic integration
 
 ---
@@ -116,8 +118,17 @@ dom.FixDOF(n0, 0)     // fix UX on node 0
 dom.FixNode(n0)       // fix UX, UY, UZ (translations only)
 dom.FixNodeAll(n0)    // fix all 6 DOFs
 
-// Loads
+// Nodal load
 dom.ApplyLoad(n1, 1, -10000) // force on node 1, DOF UY = -10 kN
+
+// Beam uniformly distributed load (requires ElasticBeam3D element)
+dom.AddBeamDistLoad(elemIdx, [3]float64{0, -1, 0}, 5000) // 5 kN/m downward
+
+// Surface pressure on a 4-node face (CCW from outside = outward normal)
+dom.AddSurfacePressure([4]int{4, 5, 6, 7}, 1000) // 1000 Pa on top face
+
+// Body force / gravity on a solid element
+dom.AddBodyForce(elemIdx, 7800, [3]float64{0, -9.81, 0}) // steel self-weight
 
 // Assemble global K and F
 dom.Assemble()
@@ -126,7 +137,20 @@ dom.ApplyDirichletBC()
 
 **DOF auto-detection**: `Assemble()` scans all elements and sets `DOFPerNode = max(DOFPerNode across elements)`. Pure solid/truss models use 3 DOF/node; models with beams or shells use 6 DOF/node.
 
-**Dirichlet BCs**: applied by the penalty-free row/column zeroing method (K[gdof,:] = 0, K[:,gdof] = 0, K[gdof,gdof] = 1, F[gdof] = value).
+**Dirichlet BCs**: applied by the penalty-free row/column zeroing method (K[gdof,:] = 0, K[:,gdof] = 0, K[gdof,gdof] = 1, F[gdof] = value). Non-zero prescribed displacements set `bc.Value ≠ 0`.
+
+### Load types
+
+| Method | Description | Supported elements |
+|--------|-------------|-------------------|
+| `ApplyLoad(node, dof, value)` | Concentrated force or moment | All |
+| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D` |
+| `AddSurfacePressure(faceNodes[4], P)` | Uniform pressure on quad face (2×2 Gauss) | Any 4 nodes |
+| `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | `Tet4` (exact), `Hexa8` (Gauss) |
+
+Elements implement optional load interfaces:
+- `element.EquivalentNodalLoader` — converts distributed load to nodal forces
+- `element.BodyForceLoader` — computes body-force nodal contributions
 
 ---
 
@@ -206,7 +230,8 @@ go build -o femgo ./cmd/femgo
     {"type": "truss3d", "nodes": [0, 1], "E": 200000, "A": 0.01}
   ],
   "boundary_conditions": [
-    {"node": 0, "dofs": [0, 1, 2]}
+    {"node": 0, "dofs": [0, 1, 2]},
+    {"node": 1, "dofs": [2], "values": [0.005]}
   ],
   "loads": [
     {"node": 1, "dof": 0, "value": 5000}
@@ -218,6 +243,28 @@ go build -o femgo ./cmd/femgo
 **DOF indices**: `0=UX`, `1=UY`, `2=UZ`, `3=RX`, `4=RY`, `5=RZ`
 
 **Solver options**: `"cholesky"` (default) or `"lu"`
+
+**Prescribed displacements**: add a `"values"` array to `boundary_conditions` parallel to `"dofs"`. Omitted values default to 0.
+
+#### Load types
+
+All load types use a `"type"` discriminator field. Omitting `"type"` is equivalent to `"nodal"`.
+
+| `"type"` | Required fields | Description |
+|----------|----------------|-------------|
+| `"nodal"` *(default)* | `node`, `dof`, `value` | Concentrated force or moment |
+| `"surface_pressure"` | `face_nodes` (4 ints), `pressure` | Uniform pressure on a quad face |
+| `"beam_dist"` | `element`, `dir` ([3]float64), `intensity` | UDL on a beam element (N/m) |
+| `"body_force"` | `element`, `rho`, `g` ([3]float64) | Gravity/body force on a solid element |
+
+```json
+"loads": [
+  {"node": 3, "dof": 1, "value": -10000},
+  {"type": "beam_dist", "element": 0, "dir": [0, -1, 0], "intensity": 5000},
+  {"type": "surface_pressure", "face_nodes": [4, 5, 6, 7], "pressure": 1000},
+  {"type": "body_force", "element": 0, "rho": 7800, "g": [0, -9.81, 0]}
+]
+```
 
 ### POST /solve – Response Format
 
@@ -286,14 +333,17 @@ curl -X POST http://localhost:8080/solve \
 
 ## Examples
 
-| Directory | Element Type | Description |
-|-----------|-------------|-------------|
-| `examples/cantilever_beam/` | `Hexa8` | 3D cantilever beam with tip point load |
-| `examples/single_hex8/` | `Hexa8` | Single cube under uniaxial compression |
-| `examples/tet4_patch/` | `Tet4` | Tetrahedral patch test (constant stress) |
-| `examples/bridge_load/` | `Truss3D` | 2D Warren truss bridge under vertical load |
-| `examples/frame_portal/` | `ElasticBeam3D` | Portal frame under lateral (sway) load |
-| `examples/beam3d/` | `ElasticBeam3D` | Single 3D beam with end moment |
+| Directory | Element Type | Load type | Description |
+|-----------|-------------|-----------|-------------|
+| `examples/cantilever_beam/` | `Hexa8` | Nodal | 3D cantilever beam with tip point load |
+| `examples/single_hex8/` | `Hexa8` | Nodal | Single cube under uniaxial compression |
+| `examples/tet4_patch/` | `Tet4` | Nodal | Tetrahedral patch test (constant stress) |
+| `examples/bridge_load/` | `Truss3D` | Nodal | 2D Warren truss bridge under vertical load |
+| `examples/frame_portal/` | `ElasticBeam3D` | Nodal | Portal frame under lateral (sway) load |
+| `examples/beam3d/` | `ElasticBeam3D` | Nodal | Single 3D beam with end moment |
+| `examples/beam_with_dist_load/` | `ElasticBeam3D` | `beam_dist` | Two-span beam with UDL 1 kN/m, fixed ends |
+| `examples/pressure_on_cube/` | `Hexa8` | `surface_pressure` | Steel cube with uniform pressure on top face |
+| `examples/gravity_solid/` | `Hexa8` | `body_force` | Concrete cube under self-weight (gravity) |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
@@ -359,7 +409,7 @@ A 5-node Warren truss, 7 members, 10 kN downward load at midspan:
 go run ./validation
 ```
 
-### Results (March 10, 2026)
+### Results (March 11, 2026)
 
 | Case | Element | Numerical | Theoretical | Rel. Err (%) | Status |
 |------|---------|-----------|-------------|--------------|--------|

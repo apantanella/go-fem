@@ -3,6 +3,9 @@
 package domain
 
 import (
+	"math"
+
+	"go-fem/dof"
 	"go-fem/element"
 
 	"gonum.org/v1/gonum/mat"
@@ -28,12 +31,41 @@ type NodalLoad struct {
 	Value  float64 // force/moment magnitude
 }
 
+// SurfacePressure applies a uniform pressure on a 4-node (quad) face.
+// FaceNodes must be ordered counter-clockwise when viewed from outside
+// so that the natural outward normal equals g_ξ × g_η.
+// P > 0 is pressure acting inward (compressive); the equivalent nodal
+// forces are in the direction −normal.
+type SurfacePressure struct {
+	FaceNodes [4]int  // global node IDs
+	P         float64 // pressure magnitude
+}
+
+// BeamLoad represents a uniformly distributed load on a single beam element.
+type BeamLoad struct {
+	ElemIdx   int        // index into Domain.Elements
+	Dir       [3]float64 // global load direction (should be unit vector)
+	Intensity float64    // load per unit length (N/m)
+}
+
+// BodyForce represents a gravitational / body-force load on a single element.
+type BodyForce struct {
+	ElemIdx int
+	Rho     float64    // mass density (kg/m³ or consistent units)
+	G       [3]float64 // acceleration vector (e.g. [0, -9.81, 0])
+}
+
 // Domain holds the complete FEM model.
 type Domain struct {
 	Nodes    []Node3D
 	Elements []element.Element
 	BCs      []BC
 	Loads    []NodalLoad
+
+	// Distributed load types
+	SurfaceLoads []SurfacePressure
+	BeamLoads    []BeamLoad
+	BodyForces   []BodyForce
 
 	// DOFPerNode is auto-detected during Assemble:
 	// 3 for pure solid/truss, 6 when beams/shells are present.
@@ -82,6 +114,21 @@ func (d *Domain) FixNodeAll(nodeID int) {
 // ApplyLoad adds a nodal force or moment.
 func (d *Domain) ApplyLoad(nodeID, dof int, value float64) {
 	d.Loads = append(d.Loads, NodalLoad{NodeID: nodeID, DOF: dof, Value: value})
+}
+
+// AddSurfacePressure registers a pressure on a 4-node face.
+func (d *Domain) AddSurfacePressure(faceNodes [4]int, p float64) {
+	d.SurfaceLoads = append(d.SurfaceLoads, SurfacePressure{FaceNodes: faceNodes, P: p})
+}
+
+// AddBeamDistLoad registers a uniformly distributed load on element elemIdx.
+func (d *Domain) AddBeamDistLoad(elemIdx int, dir [3]float64, intensity float64) {
+	d.BeamLoads = append(d.BeamLoads, BeamLoad{ElemIdx: elemIdx, Dir: dir, Intensity: intensity})
+}
+
+// AddBodyForce registers a body-force load on element elemIdx.
+func (d *Domain) AddBodyForce(elemIdx int, rho float64, g [3]float64) {
+	d.BodyForces = append(d.BodyForces, BodyForce{ElemIdx: elemIdx, Rho: rho, G: g})
 }
 
 // NumDOF returns the total number of DOFs.
@@ -134,10 +181,97 @@ func (d *Domain) Assemble() {
 		}
 	}
 
-	// --- Assemble load vector ---
+	// --- Nodal loads ---
 	for _, load := range d.Loads {
 		gdof := load.NodeID*dpn + load.DOF
 		d.F.SetVec(gdof, d.F.AtVec(gdof)+load.Value)
+	}
+
+	// --- Surface pressure loads (4-node quad faces, 2×2 Gauss) ---
+	gp := 1.0 / math.Sqrt(3.0)
+	gpPts := [2]float64{-gp, gp}
+	for _, sp := range d.SurfaceLoads {
+		var xf [4][3]float64
+		for i, nid := range sp.FaceNodes {
+			xf[i] = d.Nodes[nid].Coord
+		}
+		for _, s := range gpPts {
+			for _, t := range gpPts {
+				N := [4]float64{
+					(1 - s) * (1 - t) / 4,
+					(1 + s) * (1 - t) / 4,
+					(1 + s) * (1 + t) / 4,
+					(1 - s) * (1 + t) / 4,
+				}
+				dNds := [4]float64{-(1 - t) / 4, (1 - t) / 4, (1 + t) / 4, -(1 + t) / 4}
+				dNdt := [4]float64{-(1 - s) / 4, -(1 + s) / 4, (1 + s) / 4, (1 - s) / 4}
+
+				var gs, gt [3]float64
+				for i := 0; i < 4; i++ {
+					gs[0] += dNds[i] * xf[i][0]
+					gs[1] += dNds[i] * xf[i][1]
+					gs[2] += dNds[i] * xf[i][2]
+					gt[0] += dNdt[i] * xf[i][0]
+					gt[1] += dNdt[i] * xf[i][1]
+					gt[2] += dNdt[i] * xf[i][2]
+				}
+				// outward normal × dA (from cross product gs × gt)
+				nx := gs[1]*gt[2] - gs[2]*gt[1]
+				ny := gs[2]*gt[0] - gs[0]*gt[2]
+				nz := gs[0]*gt[1] - gs[1]*gt[0]
+
+				for i, nid := range sp.FaceNodes {
+					// P > 0 compressive: force = -P·N_i·n
+					d.F.SetVec(nid*dpn+int(dof.UX), d.F.AtVec(nid*dpn+int(dof.UX))-sp.P*N[i]*nx)
+					d.F.SetVec(nid*dpn+int(dof.UY), d.F.AtVec(nid*dpn+int(dof.UY))-sp.P*N[i]*ny)
+					d.F.SetVec(nid*dpn+int(dof.UZ), d.F.AtVec(nid*dpn+int(dof.UZ))-sp.P*N[i]*nz)
+				}
+			}
+		}
+	}
+
+	// --- Beam distributed loads ---
+	for _, bl := range d.BeamLoads {
+		if bl.ElemIdx < 0 || bl.ElemIdx >= len(d.Elements) {
+			continue
+		}
+		elem := d.Elements[bl.ElemIdx]
+		loader, ok := elem.(element.EquivalentNodalLoader)
+		if !ok {
+			continue
+		}
+		fe := loader.EquivalentNodalLoad(bl.Dir, bl.Intensity)
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		elemDPN := elem.DOFPerNode()
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			nodeID := nids[nodeIdx]
+			gdof := nodeID*dpn + int(dt)
+			d.F.SetVec(gdof, d.F.AtVec(gdof)+fe.AtVec(i))
+		}
+	}
+
+	// --- Body forces ---
+	for _, bf := range d.BodyForces {
+		if bf.ElemIdx < 0 || bf.ElemIdx >= len(d.Elements) {
+			continue
+		}
+		elem := d.Elements[bf.ElemIdx]
+		loader, ok := elem.(element.BodyForceLoader)
+		if !ok {
+			continue
+		}
+		fe := loader.BodyForceLoad(bf.G, bf.Rho)
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		elemDPN := elem.DOFPerNode()
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			nodeID := nids[nodeIdx]
+			gdof := nodeID*dpn + int(dt)
+			d.F.SetVec(gdof, d.F.AtVec(gdof)+fe.AtVec(i))
+		}
 	}
 }
 

@@ -216,6 +216,56 @@ func (b *ElasticBeam3D) Update(disp []float64) error {
 func (b *ElasticBeam3D) CommitState() error   { return nil }
 func (b *ElasticBeam3D) RevertToStart() error { b.ue = [12]float64{}; return nil }
 
+// EquivalentNodalLoad returns work-equivalent nodal forces (in global coordinates)
+// for a uniformly distributed load of given intensity in globalDir.
+// Uses fixed-end reactions for Euler-Bernoulli beam:
+//
+//	Transverse qy: Fy=qy·L/2, Mz=±qy·L²/12
+//	Transverse qz: Fz=qz·L/2, My=∓qz·L²/12
+//	Axial      qx: Fx=qx·L/2
+func (b *ElasticBeam3D) EquivalentNodalLoad(globalDir [3]float64, intensity float64) *mat.VecDense {
+	L := b.length
+	L2 := L * L
+
+	// Transform global direction to local: q_loc = R · globalDir × intensity
+	var qLoc [3]float64
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			qLoc[i] += b.R[i][j] * globalDir[j]
+		}
+	}
+	qx := qLoc[0] * intensity
+	qy := qLoc[1] * intensity
+	qz := qLoc[2] * intensity
+
+	// Work-equivalent nodal loads in local DOF order: [u,v,w,θx,θy,θz] × 2
+	fLoc := mat.NewVecDense(12, nil)
+	fLoc.SetVec(0, qx*L/2)        // Fx at node i
+	fLoc.SetVec(1, qy*L/2)        // Fy at node i
+	fLoc.SetVec(2, qz*L/2)        // Fz at node i
+	fLoc.SetVec(4, -qz*L2/12)     // My at node i
+	fLoc.SetVec(5, qy*L2/12)      // Mz at node i
+	fLoc.SetVec(6, qx*L/2)        // Fx at node j
+	fLoc.SetVec(7, qy*L/2)        // Fy at node j
+	fLoc.SetVec(8, qz*L/2)        // Fz at node j
+	fLoc.SetVec(10, qz*L2/12)     // My at node j
+	fLoc.SetVec(11, -qy*L2/12)    // Mz at node j
+
+	// Transform to global: f_global = Tᵀ · f_local (Tᵀ = blockdiag(Rᵀ,Rᵀ,Rᵀ,Rᵀ))
+	fGlob := mat.NewVecDense(12, nil)
+	for blk := 0; blk < 4; blk++ {
+		off := 3 * blk
+		for i := 0; i < 3; i++ {
+			var sum float64
+			for j := 0; j < 3; j++ {
+				sum += b.R[j][i] * fLoc.AtVec(off+j) // Rᵀ[i][j] = R[j][i]
+			}
+			fGlob.SetVec(off+i, sum)
+		}
+	}
+	return fGlob
+}
+
 // Length returns the beam length.
 func (b *ElasticBeam3D) Length() float64 { return b.length }
 

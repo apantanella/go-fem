@@ -8,6 +8,24 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
+// EquivalentNodalLoader is implemented by elements that convert a uniformly
+// distributed load into work-equivalent nodal forces.
+// globalDir is a unit vector in the load direction (e.g. [0,-1,0] for gravity).
+// intensity is the load per unit length (N/m).
+// Returns a vector of length NumDOF() in global coordinates.
+type EquivalentNodalLoader interface {
+	EquivalentNodalLoad(globalDir [3]float64, intensity float64) *mat.VecDense
+}
+
+// BodyForceLoader is implemented by elements that can compute nodal forces
+// due to a body force (gravity, centrifugal, etc.).
+// g is the body-force acceleration vector (e.g. [0,-9.81,0]).
+// rho is the mass density.
+// Returns a vector of length NumDOF() in global coordinates.
+type BodyForceLoader interface {
+	BodyForceLoad(g [3]float64, rho float64) *mat.VecDense
+}
+
 // Element is the interface for all finite elements.
 type Element interface {
 	// GetTangentStiffness returns the element stiffness matrix Ke.

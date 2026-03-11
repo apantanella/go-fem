@@ -55,23 +55,53 @@ func solveProblem(input ProblemInput) ProblemOutput {
 		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
 			return errorResponse("BC: node %d out of range", bc.Node)
 		}
-		for _, dof := range bc.DOFs {
-			if dof < 0 || dof > 5 {
-				return errorResponse("BC: invalid dof %d (must be 0–5)", dof)
+		for i, dofIdx := range bc.DOFs {
+			if dofIdx < 0 || dofIdx > 5 {
+				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
 			}
-			dom.FixDOF(bc.Node, dof)
+			val := 0.0
+			if i < len(bc.Values) {
+				val = bc.Values[i]
+			}
+			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
 		}
 	}
 
 	// --- Loads ---
-	for _, ld := range input.Loads {
-		if ld.Node < 0 || ld.Node >= len(dom.Nodes) {
-			return errorResponse("load: node %d out of range", ld.Node)
+	for i, ld := range input.Loads {
+		switch ld.Type {
+		case "", "nodal":
+			if ld.Node < 0 || ld.Node >= len(dom.Nodes) {
+				return errorResponse("load[%d]: node %d out of range", i, ld.Node)
+			}
+			if ld.DOF < 0 || ld.DOF > 5 {
+				return errorResponse("load[%d]: invalid dof %d", i, ld.DOF)
+			}
+			dom.ApplyLoad(ld.Node, ld.DOF, ld.Value)
+
+		case "surface_pressure":
+			for _, nid := range ld.FaceNodes {
+				if nid < 0 || nid >= len(dom.Nodes) {
+					return errorResponse("load[%d] surface_pressure: node %d out of range", i, nid)
+				}
+			}
+			dom.AddSurfacePressure(ld.FaceNodes, ld.Pressure)
+
+		case "beam_dist":
+			if ld.Element < 0 || ld.Element >= len(dom.Elements) {
+				return errorResponse("load[%d] beam_dist: element %d out of range", i, ld.Element)
+			}
+			dom.AddBeamDistLoad(ld.Element, ld.Dir, ld.Intensity)
+
+		case "body_force":
+			if ld.Element < 0 || ld.Element >= len(dom.Elements) {
+				return errorResponse("load[%d] body_force: element %d out of range", i, ld.Element)
+			}
+			dom.AddBodyForce(ld.Element, ld.Rho, ld.G)
+
+		default:
+			return errorResponse("load[%d]: unknown load type %q", i, ld.Type)
 		}
-		if ld.DOF < 0 || ld.DOF > 5 {
-			return errorResponse("load: invalid dof %d", ld.DOF)
-		}
-		dom.ApplyLoad(ld.Node, ld.DOF, ld.Value)
 	}
 
 	// --- Pick solver ---

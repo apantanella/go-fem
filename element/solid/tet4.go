@@ -130,6 +130,19 @@ func (t *Tet4) DOFTypes() []dof.Type { return dof.Translational3D(4) }
 func (t *Tet4) CommitState() error   { return nil }
 func (t *Tet4) RevertToStart() error { t.ue = [12]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// For Tet4 the result is exact: f_i = ρ · g · V/4 at each of the 4 nodes.
+func (t *Tet4) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(12, nil)
+	q := rho * t.vol / 4.0
+	for n := 0; n < 4; n++ {
+		f.SetVec(3*n, q*g[0])
+		f.SetVec(3*n+1, q*g[1])
+		f.SetVec(3*n+2, q*g[2])
+	}
+	return f
+}
+
 // Volume returns the element volume.
 func (t *Tet4) Volume() float64 { return t.vol }
 

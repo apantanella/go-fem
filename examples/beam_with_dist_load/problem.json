@@ -1,0 +1,44 @@
+{
+  "materials": [],
+  "nodes": [
+    [0, 0, 0],
+    [2, 0, 0],
+    [4, 0, 0]
+  ],
+  "elements": [
+    {
+      "type": "elastic_beam3d",
+      "nodes": [0, 1],
+      "E": 200000, "G": 80000,
+      "A": 0.01, "Iy": 8.33e-6, "Iz": 8.33e-6, "J": 1.41e-5,
+      "vec_xz": [0, 0, 1]
+    },
+    {
+      "type": "elastic_beam3d",
+      "nodes": [1, 2],
+      "E": 200000, "G": 80000,
+      "A": 0.01, "Iy": 8.33e-6, "Iz": 8.33e-6, "J": 1.41e-5,
+      "vec_xz": [0, 0, 1]
+    }
+  ],
+  "boundary_conditions": [
+    {"node": 0, "dofs": [0,1,2,3,4,5]},
+    {"node": 2, "dofs": [0,1,2,3,4,5]}
+  ],
+  "loads": [
+    {
+      "type": "beam_dist",
+      "element": 0,
+      "dir": [0, -1, 0],
+      "intensity": 1000
+    },
+    {
+      "type": "beam_dist",
+      "element": 1,
+      "dir": [0, -1, 0],
+      "intensity": 1000
+    }
+  ],
+  "solver": "lu",
+  "_comment": "Two-span continuous beam with UDL 1000 N/m downward. Fixed at both ends."
+}
