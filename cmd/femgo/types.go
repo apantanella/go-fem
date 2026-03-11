@@ -48,6 +48,9 @@ type ElementInput struct {
 	Iz    float64    `json:"Iz,omitempty"`     // Moment of inertia z
 	J     float64    `json:"J,omitempty"`      // Torsion constant
 	VecXZ [3]float64 `json:"vec_xz,omitempty"` // Orientation vector
+	// Timoshenko shear areas (Asy = κy·A, Asz = κz·A). Default: 5/6·A if omitted.
+	Asy float64 `json:"Asy,omitempty"` // Effective shear area in local y
+	Asz float64 `json:"Asz,omitempty"` // Effective shear area in local z
 
 	// Shell/Quad parameters
 	Nu        float64 `json:"nu,omitempty"`         // Poisson's ratio (shell/quad direct)

@@ -7,14 +7,15 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 `go-fem` solves linear static structural problems via a layered architecture that mirrors OpenSees: materials → elements → domain → analysis. Problems are defined programmatically through the Go API or submitted as JSON to the built-in HTTP server.
 
 **Key capabilities:**
-- 3D solid, truss, frame, shell, and spring elements
-- Linear isotropic elastic material
+- 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, and spring elements
+- Isotropic and orthotropic linear elastic materials
 - Automatic DOF detection (3 or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
 - Cholesky and LU linear solvers
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
 - JSON HTTP API for language-agnostic integration
+- Consistent N-mm-MPa unit system throughout all examples
 
 ---
 
@@ -99,6 +100,7 @@ type Element interface {
 | `element/truss/` | `Truss3D` | 2 | 6 | Analytical | 3D bar element, axial only |
 | `element/truss/` | `CorotTruss` | 2 | 6 | Corotational | Geometrically nonlinear truss |
 | `element/frame/` | `ElasticBeam3D` | 2 | 12 | Analytical | Euler-Bernoulli 3D beam (6 DOF/node) |
+| `element/frame/` | `TimoshenkoBeam3D` | 2 | 12 | Analytical | Timoshenko 3D beam — shear-deformable (6 DOF/node) |
 | `element/quad/` | `Quad4` | 4 | 8 | 2×2 Gauss | Plane stress or plane strain |
 | `element/shell/` | `ShellMITC4` | 4 | 24 | 2×2 + SRI | Flat shell: membrane + bending, 6 DOF/node |
 
@@ -156,7 +158,7 @@ dom.ApplyDirichletBC()
 | Method | Description | Supported elements |
 |--------|-------------|-------------------|
 | `ApplyLoad(node, dof, value)` | Concentrated force or moment | All |
-| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D` |
+| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `TimoshenkoBeam3D` |
 | `AddSurfacePressure(faceNodes[4], P)` | Uniform pressure on quad face (2×2 Gauss) | Any 4 nodes |
 | `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | `Tet4` (exact), `Hexa8` (Gauss) |
 
@@ -328,10 +330,53 @@ On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
 | `"truss3d"` | 2 | `E`, `A` | — |
 | `"corot_truss"` | 2 | `E`, `A` | — |
 | `"elastic_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | — |
+| `"timoshenko_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | `Asy`, `Asz` |
 | `"shell_mitc4"` | 4 | `E`, `nu`, `thickness` | — |
 | `"zerolength"` | 2 | `springs` (array of 6 stiffnesses: kUX..kRZ) | — |
 
 Solid elements (`tet4`, `hexa8`, `tet10`, `brick20`) require a `"material"` string referencing an entry in `"materials"`.
+
+#### Timoshenko beam — shear correction
+
+`timoshenko_beam3d` shares the same DOF layout and JSON fields as `elastic_beam3d` but accounts for transverse shear deformation via the shear-flexibility parameter:
+
+```
+Φ = 12·E·I / (G·As·L²)
+```
+
+where `As = κ·A` is the effective shear area (`κ` = shear correction factor). The stiffness matrix reduces to the Euler-Bernoulli matrix when `Φ → 0` (rigid shear, slender beam).
+
+Shear areas in JSON (`Asy` for bending in the x-y plane, `Asz` for the x-z plane):
+
+```json
+{
+  "type": "timoshenko_beam3d",
+  "nodes": [0, 1],
+  "E": 210000, "G": 80769,
+  "A": 20000, "Iy": 66666667, "Iz": 66666667, "J": 50000000,
+  "Asy": 16667, "Asz": 16667,
+  "vec_xz": [0, 0, 1]
+}
+```
+
+If `Asy`/`Asz` are omitted, the default `κ = 5/6` (rectangular solid section) is applied automatically.
+
+Typical shear correction factors:
+
+| Cross-section | κ |
+|---------------|---|
+| Rectangular solid | 5/6 ≈ 0.833 *(default)* |
+| Circular solid | 0.9 |
+| Thin-walled I (strong axis) | ~0.85 |
+| Thin-walled I (weak axis) | ~0.40 |
+
+**When to use Timoshenko instead of Euler-Bernoulli**: the shear correction becomes significant when the slenderness ratio `L/h` is small. As a rule of thumb:
+
+| L/h | Shear contribution | Recommendation |
+|-----|-------------------|----------------|
+| > 20 | < 1 % | `elastic_beam3d` is sufficient |
+| 10–20 | 1–5 % | either element |
+| < 10 | > 5 % | use `timoshenko_beam3d` |
 
 ---
 
@@ -371,48 +416,49 @@ curl -X POST http://localhost:8080/solve \
 | `examples/pressure_on_cube/` | `Hexa8` | `surface_pressure` | Steel cube with uniform pressure on top face |
 | `examples/gravity_solid/` | `Hexa8` | `body_force` | Concrete cube under self-weight (gravity) |
 | `examples/ortho_cube/` | `Hexa8` | Nodal | Timber cube (orthotropic) under axial compression along grain |
+| `examples/timoshenko_deep_beam/` | `TimoshenkoBeam3D` | Nodal | Deep cantilever (L/h=2): shear adds 16 % to EB deflection |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
 ### Example: Portal Frame (`examples/frame_portal/problem.json`)
 
-A 6 m × 3 m portal frame with fixed bases, 3 beam elements, lateral load of 1 kN at left column top:
+A 6000 mm × 3000 mm portal frame (N-mm-MPa), fixed bases, lateral load 10 kN at left column top. Expected sway ≈ 11 mm.
 
 ```json
 {
-  "nodes": [[0,0,0],[0,3,0],[6,3,0],[6,0,0]],
+  "nodes": [[0,0,0],[0,3000,0],[6000,3000,0],[6000,0,0]],
   "elements": [
-    {"type":"elastic_beam3d","nodes":[0,1],"E":200000,"G":80000,
-     "A":0.01,"Iy":8.33e-6,"Iz":8.33e-6,"J":1.41e-5,"vec_xz":[0,0,1]},
-    {"type":"elastic_beam3d","nodes":[1,2],"E":200000,"G":80000,
-     "A":0.01,"Iy":8.33e-6,"Iz":8.33e-6,"J":1.41e-5,"vec_xz":[0,0,1]},
-    {"type":"elastic_beam3d","nodes":[3,2],"E":200000,"G":80000,
-     "A":0.01,"Iy":8.33e-6,"Iz":8.33e-6,"J":1.41e-5,"vec_xz":[0,0,1]}
+    {"type":"elastic_beam3d","nodes":[0,1],
+     "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]},
+    {"type":"elastic_beam3d","nodes":[1,2],
+     "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]},
+    {"type":"elastic_beam3d","nodes":[3,2],
+     "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]}
   ],
   "boundary_conditions": [
     {"node":0,"dofs":[0,1,2,3,4,5]},
     {"node":3,"dofs":[0,1,2,3,4,5]}
   ],
-  "loads": [{"node":1,"dof":0,"value":1000}],
+  "loads": [{"node":1,"dof":0,"value":10000}],
   "solver": "lu"
 }
 ```
 
 ### Example: Truss Bridge (`examples/bridge_load/problem.json`)
 
-A 5-node Warren truss, 7 members, 10 kN downward load at midspan:
+A 5-node Warren truss (N-mm-MPa), 7 members, 100 kN midspan downward load:
 
 ```json
 {
-  "nodes": [[0,0,0],[5,0,0],[10,0,0],[2.5,3,0],[7.5,3,0]],
+  "nodes": [[0,0,0],[5000,0,0],[10000,0,0],[2500,3000,0],[7500,3000,0]],
   "elements": [
-    {"type":"truss3d","nodes":[0,1],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[1,2],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[0,3],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[1,3],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[1,4],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[2,4],"E":200000,"A":0.01},
-    {"type":"truss3d","nodes":[3,4],"E":200000,"A":0.01}
+    {"type":"truss3d","nodes":[0,1],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[1,2],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[0,3],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[1,3],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[1,4],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[2,4],"E":210000,"A":3000},
+    {"type":"truss3d","nodes":[3,4],"E":210000,"A":3000}
   ],
   "boundary_conditions": [
     {"node":0,"dofs":[0,1,2]},
@@ -421,10 +467,31 @@ A 5-node Warren truss, 7 members, 10 kN downward load at midspan:
     {"node":3,"dofs":[2]},
     {"node":4,"dofs":[2]}
   ],
+  "loads": [{"node":1,"dof":1,"value":-100000}],
+  "solver": "lu"
+}
+```
+
+### Example: Timoshenko Deep Beam (`examples/timoshenko_deep_beam/problem.json`)
+
+A 400 mm × 200 mm deep cantilever (L/h = 2), tip load 10 kN. Shear deformation contributes ~16 % to the total deflection:
+
+```json
+{
+  "nodes": [[0,0,0],[400,0,0]],
+  "elements": [
+    {"type":"timoshenko_beam3d","nodes":[0,1],
+     "E":210000,"G":80769,"A":20000,
+     "Iy":66666667,"Iz":66666667,"J":50000000,
+     "Asy":16667,"Asz":16667,"vec_xz":[0,0,1]}
+  ],
+  "boundary_conditions": [{"node":0,"dofs":[0,1,2,3,4,5]}],
   "loads": [{"node":1,"dof":1,"value":-10000}],
   "solver": "lu"
 }
 ```
+
+Expected tip deflection: **−0.01821 mm** (EB bending 0.01524 + shear 0.00297).
 
 ---
 

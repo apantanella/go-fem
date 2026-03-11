@@ -308,6 +308,21 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		sec := section.BeamSection3D{A: ei.A, Iy: ei.Iy, Iz: ei.Iz, J: ei.J}
 		return frame.NewElasticBeam3D(eid, n2, c2, ei.E, ei.G, sec, ei.VecXZ), nil
 
+	case "timoshenko_beam3d":
+		nids, coords, err := getCoords3(ei.Nodes, 2)
+		if err != nil {
+			return nil, err
+		}
+		if ei.E <= 0 || ei.G <= 0 || ei.A <= 0 {
+			return nil, fmt.Errorf("timoshenko_beam3d requires E, G, A > 0")
+		}
+		var n2 [2]int
+		var c2 [2][3]float64
+		copy(n2[:], nids)
+		copy(c2[:], coords)
+		sec := section.BeamSection3D{A: ei.A, Iy: ei.Iy, Iz: ei.Iz, J: ei.J, Asy: ei.Asy, Asz: ei.Asz}
+		return frame.NewTimoshenkoBeam3D(eid, n2, c2, ei.E, ei.G, sec, ei.VecXZ), nil
+
 	case "shell_mitc4":
 		nids, coords, err := getCoords3(ei.Nodes, 4)
 		if err != nil {
@@ -393,6 +408,10 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			ef.N = &N
 			ef.Sigma = &sigma
 		case *frame.ElasticBeam3D:
+			ef2 := e.EndForces()
+			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
+			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Vz: ef2.J[2], Mx: ef2.J[3], My: ef2.J[4], Mz: ef2.J[5]}
+		case *frame.TimoshenkoBeam3D:
 			ef2 := e.EndForces()
 			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
 			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Vz: ef2.J[2], Mx: ef2.J[3], My: ef2.J[4], Mz: ef2.J[5]}
