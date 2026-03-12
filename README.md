@@ -4,7 +4,7 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 
 ## Overview
 
-`go-fem` solves linear static structural problems via a layered architecture that mirrors OpenSees: materials → elements → domain → analysis. Problems are defined programmatically through the Go API or submitted as JSON to the built-in HTTP server.
+`go-fem` solves linear static and dynamic structural problems via a layered architecture that mirrors OpenSees: materials → elements → domain → analysis. Problems are defined programmatically through the Go API or submitted as JSON to the built-in HTTP server.
 
 **Key capabilities:**
 - 2D and 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, and spring/connector elements
@@ -12,6 +12,8 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 - Automatic DOF detection (2, 3, or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
 - Five linear solvers: `Cholesky` (dense SPD), `LU` (dense general), `SkylineLDL` (sparse banded), `CG` (iterative SPD), `GMRES` (iterative general/non-symmetric)
+- **Modal (free-vibration) analysis**: natural frequencies, mode shapes, participation factors, effective mass ratios — via generalized eigenvalue problem K·φ = ω²·M·φ
+- Consistent mass matrices for all element types (truss, frame, solid, shell)
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
 - Optional `"dimensions"` field (`"2D"` / `"3D"`) validates element compatibility at solve time
@@ -29,7 +31,7 @@ Four-layer design mirroring OpenSees:
 Layer 1 – material/     Constitutive models          (Material3D interface)
 Layer 2 – element/      Finite elements               (Element interface)
 Layer 3 – domain/       Mesh, assembly, BCs           (Domain struct)
-Layer 4 – analysis/     Solution strategy + solver/   (StaticLinearAnalysis)
+Layer 4 – analysis/     Solution strategy + solver/   (StaticLinearAnalysis, ModalAnalysis)
 ```
 
 Support packages:
@@ -85,6 +87,22 @@ type Element interface {
     RevertToStart() error
 }
 ```
+
+Elements that support dynamic analysis additionally implement the optional `MassMatrixAssembler` interface:
+
+```go
+type MassMatrixAssembler interface {
+    GetMassMatrix(rho float64) *mat.Dense // consistent element mass matrix Me
+}
+```
+
+| Element | Mass formulation |
+|---------|----------------|
+| `Truss2D`, `Truss3D` | ρAL/6·[2I, I; I, 2I] — consistent bar (frame-invariant) |
+| `ElasticBeam2D` | ρAL/420 Hermitian (axial + bending), rotated to global |
+| `ElasticBeam3D` | ρAL/420 Hermitian (axial, torsion, bending xy+xz), rotated to global |
+| `Tet4` | Analytical: ρV/20·(1+δₙₘ) per DOF direction — exact for linear tet |
+| `Hexa8` | 2×2×2 Gauss integration of ρ·N·Nᵀ |
 
 ### Solid Elements
 
@@ -160,6 +178,18 @@ dom.AddBodyForce(elemIdx, 7800, [3]float64{0, -9.81, 0}) // steel self-weight
 // Assemble global K and F
 dom.Assemble()
 dom.ApplyDirichletBC()
+
+// Assemble global mass matrix (for modal analysis)
+masses := []domain.ElementMass{
+    {ElemIdx: 0, Rho: 7850}, // element 0, steel density kg/m³
+}
+dom.AssembleMassMatrix(masses)
+
+// Query free DOFs (not constrained by Dirichlet BCs)
+freeDOFs := dom.FreeDOFs() // []int — global DOF indices
+
+// Query DOF type at a global DOF index (UX, UY, UZ, RX, RY, RZ)
+dt := dom.DOFTypeAt(globalDOFIdx) // dof.Type
 ```
 
 **DOF auto-detection**: `Assemble()` scans all elements and sets `DOFPerNode = max(DOFPerNode across elements)`. Pure plane-stress/strain models (Tri3, Tri6, Quad4) and Truss2D use 2 DOF/node; solid/truss-3D models use 3 DOF/node; plane frames (ElasticBeam2D, TimoshenkoBeam2D) use 3 DOF/node; models with 3D beams or shells use 6 DOF/node.
@@ -211,9 +241,77 @@ U, err := ana.Run()
 disp := dom.SetDisplacements(U) // [][6]float64 indexed by node ID
 ```
 
-### Solvers
+### ModalAnalysis
 
-All solvers implement `solver.LinearSolver`:
+Free-vibration (eigenvalue) analysis — natural frequencies, mode shapes, participation factors:
+
+1. Assemble global `K` and `M`
+2. Identify free DOFs (not constrained by Dirichlet BCs)
+3. Extract reduced `K_red` and `M_red` submatrices
+4. Solve K·φ = ω²·M·φ via Cholesky transformation → standard symmetric eigenvalue problem
+5. Expand mode shapes to full DOF space and compute participation factors
+
+```go
+a := &analysis.ModalAnalysis{
+    Dom:      dom,
+    Masses:   []domain.ElementMass{{ElemIdx: 0, Rho: 7850}},
+    NumModes: 10, // number of modes to extract (default 10)
+}
+res, err := a.Run()
+
+// Results
+res.NumModes              // int — number of modes extracted
+res.Omega2[k]             // float64 — ω² [rad²/s²] for mode k (ascending)
+res.Frequencies[k]        // float64 — f [Hz]
+res.Periods[k]            // float64 — T = 1/f [s]
+res.ModeShapes[k][dof]    // float64 — M-normalised mode shape (φᵀ·M·φ = 1)
+res.ParticipationFactors[k][d] // float64 — Γ_{k,d} = φₖᵀ·M·r_d (d=0:X,1:Y,2:Z)
+res.EffectiveMass[k][d]        // float64 — fraction 0–1: Γ²_{k,d}/m_total_d
+res.CumulativeEffectiveMass[k][d] // float64 — cumulative sum over modes 0..k
+res.AngularFrequency(k)   // float64 — ω [rad/s]
+```
+
+**DOF type conventions for `FixDOF`**: always pass the `dof.Type` enum value cast to `int`, not the DOF offset within the element. For example, `RZ` has enum value 5 regardless of whether the element uses 3 or 6 DOF/node:
+
+```go
+dom.FixDOF(nodeID, int(dof.UX))  // = 0
+dom.FixDOF(nodeID, int(dof.UY))  // = 1
+dom.FixDOF(nodeID, int(dof.UZ))  // = 2
+dom.FixDOF(nodeID, int(dof.RX))  // = 3
+dom.FixDOF(nodeID, int(dof.RY))  // = 4
+dom.FixDOF(nodeID, int(dof.RZ))  // = 5
+```
+
+**Completeness**: effective mass fractions sum to 100% per direction only when all free-DOF modes are extracted (`NumModes = len(freeDOFs)`). The computation is performed on the reduced system to satisfy this condition exactly.
+
+#### Example: Cantilever Beam Modal Analysis
+
+```go
+dom := domain.NewDomain()
+n0 := dom.AddNode(0, 0, 0)
+n1 := dom.AddNode(2000, 0, 0) // L = 2000 mm
+
+sec := section.BeamSection2D{A: 100, Iz: 833.33}
+elem := frame.NewElasticBeam2D(0, [2]int{n0, n1}, coords, 210000, sec)
+dom.AddElement(elem)
+
+// Clamp node 0 using enum values
+dom.FixDOF(n0, int(dof.UX))
+dom.FixDOF(n0, int(dof.UY))
+dom.FixDOF(n0, int(dof.RZ))
+
+res, err := (&analysis.ModalAnalysis{
+    Dom:      dom,
+    Masses:   []domain.ElementMass{{ElemIdx: 0, Rho: 7.85e-6}}, // kg/mm³
+    NumModes: 3,
+}).Run()
+
+fmt.Printf("f₁ = %.4f Hz\n", res.Frequencies[0])
+```
+
+### Linear Solvers
+
+All linear solvers implement `solver.LinearSolver`:
 ```go
 type LinearSolver interface {
     Solve(K *mat.Dense, F *mat.VecDense) (*mat.VecDense, error)
@@ -252,6 +350,28 @@ slv = solver.CG{Tol: 1e-12, MaxIter: 500}
 // Iterative — GMRES (general / non-symmetric)
 slv = solver.GMRES{Tol: 1e-10, Restart: 30}
 ```
+
+### Eigenvalue Solver
+
+The `solver` package also provides the generalized eigenvalue solver used by `ModalAnalysis`:
+
+```go
+// Solve K·φ = ω²·M·φ for the numModes smallest eigenvalues.
+// K and M must be the reduced (free-DOF) matrices — symmetric, positive definite.
+res, err := solver.SolveGeneralizedEigen(Kred, Mred, numModes)
+// res.Omega2  []float64    — eigenvalues ω² [rad²/s²] in ascending order
+// res.Modes   *mat.Dense   — (nFree × numModes), M-normalised columns
+
+// Utility functions
+f := solver.FrequencyHz(omega2)    // ω² → f [Hz]
+T := solver.PeriodSeconds(omega2)  // ω² → T [s]
+```
+
+**Algorithm** (Bathe §10.2):
+1. Cholesky-factorize M = L·Lᵀ
+2. Form A = L⁻¹·K·L⁻ᵀ (symmetric)
+3. Solve the standard symmetric problem A·y = ω²·y via `gonum mat.EigenSym`
+4. Back-transform φ = L⁻ᵀ·y (M-normalised: φᵀ·M·φ = 1)
 
 ---
 
@@ -672,10 +792,11 @@ The package already ships five implementations: `Cholesky`, `LU`, `SkylineLDL`, 
 
 ### Adding an Analysis Strategy
 
+`ModalAnalysis` (eigenvalue analysis) is fully implemented — see [Layer 4 – Analysis & Solvers](#layer-4--analysis--solvers).
+
 Planned extensions:
 - **Nonlinear static** (Newton-Raphson with load stepping)
 - **Dynamic** (Newmark-β time integration)
-- **Modal** (eigenvalue analysis for natural frequencies)
 
 ---
 
