@@ -102,6 +102,21 @@ func (t *Truss3D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return f
 }
 
+// GetMassMatrix returns the 6×6 consistent mass matrix in global coordinates.
+// For a linear bar: Me = ρAL/6 · [2I₃, I₃; I₃, 2I₃]
+// The translational mass matrix is frame-invariant (no rotation required).
+func (t *Truss3D) GetMassMatrix(rho float64) *mat.Dense {
+	me := mat.NewDense(6, 6, nil)
+	c := rho * t.A * t.length / 6.0
+	for i := 0; i < 3; i++ {
+		me.Set(i, i, 2*c)
+		me.Set(i+3, i+3, 2*c)
+		me.Set(i, i+3, c)
+		me.Set(i+3, i, c)
+	}
+	return me
+}
+
 // Length returns the element length.
 func (t *Truss3D) Length() float64 { return t.length }
 

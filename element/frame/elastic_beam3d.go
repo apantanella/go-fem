@@ -272,6 +272,94 @@ func (b *ElasticBeam3D) EquivalentNodalLoad(globalDir [3]float64, intensity floa
 	return fGlob
 }
 
+// GetMassMatrix returns the 12×12 consistent mass matrix in global coordinates.
+// Local DOF order per node: [u, v, w, θx, θy, θz]
+// Axial:        ρAL/6 · [2,1;1,2]
+// Torsion:      ρIpL/6 · [2,1;1,2]  where Ip = Iy+Iz (polar moment of area)
+// Bending x-y:  ρAL/420 · Hermitian (DOFs v, θz)
+// Bending x-z:  ρAL/420 · Hermitian with θy sign-flipped (DOFs w, θy)
+// The local matrix is rotated: Mₑ = Tᵀ · Mₗₒc · T
+func (b *ElasticBeam3D) GetMassMatrix(rho float64) *mat.Dense {
+	L := b.length
+	L2 := L * L
+	A := b.Sec.A
+	Iy := b.Sec.Iy
+	Iz := b.Sec.Iz
+	Ip := Iy + Iz // polar moment of area for torsional rotational inertia
+
+	mLoc := mat.NewDense(12, 12, nil)
+
+	// Axial (0=u₁, 6=u₂)
+	ca := rho * A * L / 6.0
+	mLoc.Set(0, 0, 2*ca)
+	mLoc.Set(6, 6, 2*ca)
+	mLoc.Set(0, 6, ca)
+	mLoc.Set(6, 0, ca)
+
+	// Torsion (3=θx₁, 9=θx₂)
+	ct := rho * Ip * L / 6.0
+	mLoc.Set(3, 3, 2*ct)
+	mLoc.Set(9, 9, 2*ct)
+	mLoc.Set(3, 9, ct)
+	mLoc.Set(9, 3, ct)
+
+	// Bending x-y plane (1=v₁, 5=θz₁, 7=v₂, 11=θz₂) — standard Hermitian
+	cb := rho * A * L / 420.0
+	mLoc.Set(1, 1, 156*cb)
+	mLoc.Set(7, 7, 156*cb)
+	mLoc.Set(1, 7, 54*cb)
+	mLoc.Set(7, 1, 54*cb)
+	mLoc.Set(1, 5, 22*L*cb)
+	mLoc.Set(5, 1, 22*L*cb)
+	mLoc.Set(1, 11, -13*L*cb)
+	mLoc.Set(11, 1, -13*L*cb)
+	mLoc.Set(7, 5, 13*L*cb)
+	mLoc.Set(5, 7, 13*L*cb)
+	mLoc.Set(7, 11, -22*L*cb)
+	mLoc.Set(11, 7, -22*L*cb)
+	mLoc.Set(5, 5, 4*L2*cb)
+	mLoc.Set(11, 11, 4*L2*cb)
+	mLoc.Set(5, 11, -3*L2*cb)
+	mLoc.Set(11, 5, -3*L2*cb)
+
+	// Bending x-z plane (2=w₁, 4=θy₁, 8=w₂, 10=θy₂)
+	// θy uses opposite sign convention (θy = -dw/dx), so coupling terms are negated.
+	mLoc.Set(2, 2, 156*cb)
+	mLoc.Set(8, 8, 156*cb)
+	mLoc.Set(2, 8, 54*cb)
+	mLoc.Set(8, 2, 54*cb)
+	mLoc.Set(2, 4, -22*L*cb)
+	mLoc.Set(4, 2, -22*L*cb)
+	mLoc.Set(2, 10, 13*L*cb)
+	mLoc.Set(10, 2, 13*L*cb)
+	mLoc.Set(8, 4, -13*L*cb)
+	mLoc.Set(4, 8, -13*L*cb)
+	mLoc.Set(8, 10, 22*L*cb)
+	mLoc.Set(10, 8, 22*L*cb)
+	mLoc.Set(4, 4, 4*L2*cb)
+	mLoc.Set(10, 10, 4*L2*cb)
+	mLoc.Set(4, 10, -3*L2*cb)
+	mLoc.Set(10, 4, -3*L2*cb)
+
+	// Transformation T (12×12 block diagonal: [R, R, R, R])
+	T := mat.NewDense(12, 12, nil)
+	for block := 0; block < 4; block++ {
+		off := block * 3
+		for i := 0; i < 3; i++ {
+			for j := 0; j < 3; j++ {
+				T.Set(off+i, off+j, b.R[i][j])
+			}
+		}
+	}
+
+	// Mₑ = Tᵀ · Mₗₒc · T
+	tmp := mat.NewDense(12, 12, nil)
+	tmp.Mul(mLoc, T)
+	me := mat.NewDense(12, 12, nil)
+	me.Mul(T.T(), tmp)
+	return me
+}
+
 // Length returns the beam length.
 func (b *ElasticBeam3D) Length() float64 { return b.length }
 

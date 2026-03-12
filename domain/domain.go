@@ -81,6 +81,13 @@ type Domain struct {
 
 	K *mat.Dense    // global stiffness (assembled)
 	F *mat.VecDense // global force vector
+	M *mat.Dense    // global mass matrix (assembled by AssembleMassMatrix)
+}
+
+// ElementMass pairs an element index with its mass density for mass assembly.
+type ElementMass struct {
+	ElemIdx int
+	Rho     float64 // mass density (kg/m³ or consistent units)
 }
 
 // NewDomain creates an empty domain.
@@ -339,6 +346,78 @@ func (d *Domain) SetDisplacements(U *mat.VecDense) [][6]float64 {
 		}
 	}
 	return disp
+}
+
+// DOFTypeAt returns the DOF type (dof.UX … dof.RZ) for a global DOF index.
+// Must be called after Assemble() has set DOFPerNode and reverseDOF.
+func (d *Domain) DOFTypeAt(globalDOF int) dof.Type {
+	return dof.Type(d.reverseDOF[globalDOF%d.DOFPerNode])
+}
+
+// FreeDOFs returns the list of global DOF indices that are not constrained by
+// any Dirichlet BC. The slice is sorted in ascending order.
+// Must be called after Assemble().
+func (d *Domain) FreeDOFs() []int {
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
+	constrained := make([]bool, ndof)
+	for _, bc := range d.BCs {
+		off := d.dofOffset[bc.DOF]
+		if off < 0 {
+			continue
+		}
+		gdof := bc.NodeID*dpn + off
+		if gdof < ndof {
+			constrained[gdof] = true
+		}
+	}
+	free := make([]int, 0, ndof)
+	for i := 0; i < ndof; i++ {
+		if !constrained[i] {
+			free = append(free, i)
+		}
+	}
+	return free
+}
+
+// AssembleMassMatrix constructs the global consistent mass matrix M.
+// Must be called after Assemble() (which sets DOFPerNode and dofOffset).
+// Elements that do not implement element.MassMatrixAssembler are skipped.
+func (d *Domain) AssembleMassMatrix(masses []ElementMass) {
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
+	d.M = mat.NewDense(ndof, ndof, nil)
+
+	for _, em := range masses {
+		if em.ElemIdx < 0 || em.ElemIdx >= len(d.Elements) {
+			continue
+		}
+		elem := d.Elements[em.ElemIdx]
+		assembler, ok := elem.(element.MassMatrixAssembler)
+		if !ok {
+			continue
+		}
+		me := assembler.GetMassMatrix(em.Rho)
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		eldof := elem.NumDOF()
+		elemDPN := elem.DOFPerNode()
+
+		globalDOFs := make([]int, eldof)
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			nodeID := nids[nodeIdx]
+			globalDOFs[i] = nodeID*dpn + d.dofOffset[int(dt)]
+		}
+
+		for i := 0; i < eldof; i++ {
+			gi := globalDOFs[i]
+			for j := 0; j < eldof; j++ {
+				gj := globalDOFs[j]
+				d.M.Set(gi, gj, d.M.At(gi, gj)+me.At(i, j))
+			}
+		}
+	}
 }
 
 // ElementDisp extracts the displacement vector for a single element from the

@@ -26,6 +26,13 @@ type BodyForceLoader interface {
 	BodyForceLoad(g [3]float64, rho float64) *mat.VecDense
 }
 
+// MassMatrixAssembler is implemented by elements that can compute their
+// consistent mass matrix. rho is the mass density (kg/m³ or consistent units).
+// Returns a square matrix of size NumDOF() × NumDOF().
+type MassMatrixAssembler interface {
+	GetMassMatrix(rho float64) *mat.Dense
+}
+
 // Element is the interface for all finite elements.
 type Element interface {
 	// GetTangentStiffness returns the element stiffness matrix Ke.

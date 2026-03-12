@@ -189,6 +189,54 @@ func (h *Hexa8) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return f
 }
 
+// GetMassMatrix returns the 24×24 consistent mass matrix using 2×2×2 Gauss
+// quadrature: Mₑ[3n+k, 3m+k] = ρ·∫Nₙ·Nₘ dV  for k=0,1,2.
+func (h *Hexa8) GetMassMatrix(rho float64) *mat.Dense {
+	const ndof = 24
+	me := mat.NewDense(ndof, ndof, nil)
+
+	gp := 1.0 / math.Sqrt(3.0)
+	pts := [2]float64{-gp, gp}
+
+	X := mat.NewDense(8, 3, nil)
+	for i := 0; i < 8; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, h.Coords[i][j])
+		}
+	}
+	dNnat := mat.NewDense(3, 8, nil)
+	J := mat.NewDense(3, 3, nil)
+
+	for _, xi := range pts {
+		for _, eta := range pts {
+			for _, zeta := range pts {
+				var N [8]float64
+				for i := 0; i < 8; i++ {
+					si := hex8Ref[i][0]
+					ei := hex8Ref[i][1]
+					zi := hex8Ref[i][2]
+					N[i] = (1 + si*xi) * (1 + ei*eta) * (1 + zi*zeta) / 8
+					dNnat.Set(0, i, si*(1+ei*eta)*(1+zi*zeta)/8)
+					dNnat.Set(1, i, (1+si*xi)*ei*(1+zi*zeta)/8)
+					dNnat.Set(2, i, (1+si*xi)*(1+ei*eta)*zi/8)
+				}
+				J.Mul(dNnat, X)
+				detJ := math.Abs(mat.Det(J))
+				scale := rho * detJ // Gauss weight = 1 for 2-pt rule
+				for n := 0; n < 8; n++ {
+					for m := 0; m < 8; m++ {
+						v := scale * N[n] * N[m]
+						me.Set(3*n, 3*m, me.At(3*n, 3*m)+v)
+						me.Set(3*n+1, 3*m+1, me.At(3*n+1, 3*m+1)+v)
+						me.Set(3*n+2, 3*m+2, me.At(3*n+2, 3*m+2)+v)
+					}
+				}
+			}
+		}
+	}
+	return me
+}
+
 // StressCentroid returns the Cauchy stress at the element centroid (ξ=η=ζ=0)
 // in Voigt notation [sxx, syy, szz, txy, tyz, txz].
 func (h *Hexa8) StressCentroid() [6]float64 {

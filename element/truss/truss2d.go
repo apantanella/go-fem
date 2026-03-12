@@ -111,6 +111,22 @@ func (t *Truss2D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return f
 }
 
+// GetMassMatrix returns the 4×4 consistent mass matrix in global coordinates.
+// For a linear 2D bar: Me = ρAL/6 · [2I₂, I₂; I₂, 2I₂]
+func (t *Truss2D) GetMassMatrix(rho float64) *mat.Dense {
+	me := mat.NewDense(4, 4, nil)
+	c := rho * t.A * t.length / 6.0
+	me.Set(0, 0, 2*c)
+	me.Set(1, 1, 2*c)
+	me.Set(2, 2, 2*c)
+	me.Set(3, 3, 2*c)
+	me.Set(0, 2, c)
+	me.Set(2, 0, c)
+	me.Set(1, 3, c)
+	me.Set(3, 1, c)
+	return me
+}
+
 // Length returns the element length.
 func (t *Truss2D) Length() float64 { return t.length }
 

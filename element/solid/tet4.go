@@ -143,6 +143,26 @@ func (t *Tet4) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return f
 }
 
+// GetMassMatrix returns the 12×12 consistent mass matrix (analytical, exact).
+// For a linear tetrahedron: Mₑ[3n+k, 3m+k] = ρV/20·(1 + δₙₘ)  (n,m = nodes 0..3).
+func (t *Tet4) GetMassMatrix(rho float64) *mat.Dense {
+	me := mat.NewDense(12, 12, nil)
+	diag := rho * t.vol / 10.0  // 2/20
+	offD := rho * t.vol / 20.0  // 1/20
+	for n := 0; n < 4; n++ {
+		for m := 0; m < 4; m++ {
+			v := offD
+			if n == m {
+				v = diag
+			}
+			for k := 0; k < 3; k++ {
+				me.Set(3*n+k, 3*m+k, v)
+			}
+		}
+	}
+	return me
+}
+
 // Volume returns the element volume.
 func (t *Tet4) Volume() float64 { return t.vol }
 

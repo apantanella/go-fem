@@ -163,6 +163,68 @@ func (b *ElasticBeam2D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return b.EquivalentNodalLoad(g, rho*b.Sec.A)
 }
 
+// GetMassMatrix returns the 6×6 consistent mass matrix in global coordinates.
+// Local DOF order: [u₁, v₁, θz₁, u₂, v₂, θz₂]
+// Axial:   ρAL/6 · [2,1;1,2]
+// Bending: ρAL/420 · Hermitian matrix (Euler-Bernoulli shape functions)
+// The local matrix is rotated: Mₑ = Tᵀ · Mₗₒc · T
+func (b *ElasticBeam2D) GetMassMatrix(rho float64) *mat.Dense {
+	L := b.length
+	L2 := L * L
+	A := b.Sec.A
+
+	// Local consistent mass matrix (6×6)
+	mLoc := mat.NewDense(6, 6, nil)
+
+	// Axial (DOFs 0, 3): ρAL/6 · [2,1;1,2]
+	ca := rho * A * L / 6.0
+	mLoc.Set(0, 0, 2*ca)
+	mLoc.Set(3, 3, 2*ca)
+	mLoc.Set(0, 3, ca)
+	mLoc.Set(3, 0, ca)
+
+	// Bending (DOFs 1,2,4,5): ρAL/420 · Hermitian
+	cb := rho * A * L / 420.0
+	mLoc.Set(1, 1, 156*cb)
+	mLoc.Set(1, 4, 54*cb)
+	mLoc.Set(4, 1, 54*cb)
+	mLoc.Set(4, 4, 156*cb)
+
+	mLoc.Set(1, 2, 22*L*cb)
+	mLoc.Set(2, 1, 22*L*cb)
+	mLoc.Set(1, 5, -13*L*cb)
+	mLoc.Set(5, 1, -13*L*cb)
+
+	mLoc.Set(4, 2, 13*L*cb)
+	mLoc.Set(2, 4, 13*L*cb)
+	mLoc.Set(4, 5, -22*L*cb)
+	mLoc.Set(5, 4, -22*L*cb)
+
+	mLoc.Set(2, 2, 4*L2*cb)
+	mLoc.Set(5, 5, 4*L2*cb)
+	mLoc.Set(2, 5, -3*L2*cb)
+	mLoc.Set(5, 2, -3*L2*cb)
+
+	// Transformation T (same as for stiffness)
+	c, s := b.cos, b.sin
+	T := mat.NewDense(6, 6, nil)
+	for blk := 0; blk < 2; blk++ {
+		o := blk * 3
+		T.Set(o+0, o+0, c)
+		T.Set(o+0, o+1, s)
+		T.Set(o+1, o+0, -s)
+		T.Set(o+1, o+1, c)
+		T.Set(o+2, o+2, 1)
+	}
+
+	// Mₑ = Tᵀ · Mₗₒc · T
+	tmp := mat.NewDense(6, 6, nil)
+	tmp.Mul(mLoc, T)
+	me := mat.NewDense(6, 6, nil)
+	me.Mul(T.T(), tmp)
+	return me
+}
+
 // Length returns the beam length.
 func (b *ElasticBeam2D) Length() float64 { return b.length }
 
