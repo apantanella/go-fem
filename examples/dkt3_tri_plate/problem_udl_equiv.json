@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "_units": "N, mm, MPa — consistent SI-derived system.",
   "_problem": "DKT3 triangular plate with equivalent nodal loads for a uniform transverse pressure q.",
   "_theory": "For a linear triangular interpolation, uniform pressure q over area A gives equivalent nodal forces Fz_i = q*A/3.",
@@ -15,7 +16,7 @@
   ],
   "elements": [
     {
-      "type": "dkt3",
+      "type": "dkt3_3d",
       "nodes": [0, 1, 2],
       "E": 210000,
       "nu": 0.3,

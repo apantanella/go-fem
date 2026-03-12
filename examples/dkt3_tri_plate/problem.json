@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "_units": "N, mm, MPa — consistent SI-derived system.",
   "_problem": "Single DKT3 triangular thin plate in XY plane. Edge (0-1) clamped, downward point load at node 2.",
   "_notes": "DKT3 active bending DOFs are UZ, RX, RY per node; model remains in 6-DOF/node global layout.",
@@ -10,7 +11,7 @@
   ],
   "elements": [
     {
-      "type": "dkt3",
+      "type": "dkt3_3d",
       "nodes": [0, 1, 2],
       "E": 210000,
       "nu": 0.3,

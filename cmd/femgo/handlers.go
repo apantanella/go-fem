@@ -43,19 +43,51 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 		"service": "go-fem",
 		"version": "0.2.0",
 		"elements": []string{
-			"tet4", "hexa8", "tet10", "brick20",
-			"truss3d", "corot_truss",
-			"elastic_beam3d",
-			"quad4",
-			"shell_mitc4", "dkt3",
-			"zerolength",
+			// 3D
+			"tet4_3d", "hexa8_3d", "tet10_3d", "brick20_3d",
+			"truss_3d", "corot_truss_3d",
+			"elastic_beam_3d", "timoshenko_beam_3d",
+			"shell_mitc4_3d", "dkt3_3d", "zerolength_3d",
+			// 2D
+			"truss_2d",
+			"elastic_beam_2d", "timoshenko_beam_2d",
+			"quad4_2d", "quad8_2d", "tri3_2d", "tri6_2d",
 		},
 		"materials": []string{"isotropic_linear", "orthotropic_linear"},
 		"solvers":   []string{"cholesky", "lu"},
 		"endpoints": map[string]string{
-			"POST /solve": "Submit a FEM problem (JSON) and get displacement results",
-			"GET /health": "Health check",
-			"GET /":       "This info page",
+			"POST /solve":    "Submit a FEM problem (JSON) and get displacement results",
+			"GET  /elements": "List available elements grouped by dimension",
+			"GET  /health":   "Health check",
+			"GET  /":         "This info page",
+		},
+	})
+}
+
+func handleElements(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"2D": []string{
+			"truss_2d",
+			"elastic_beam_2d",
+			"timoshenko_beam_2d",
+			"quad4_2d",
+			"quad8_2d",
+			"tri3_2d",
+			"tri6_2d",
+		},
+		"3D": []string{
+			"tet4_3d",
+			"hexa8_3d",
+			"tet10_3d",
+			"brick20_3d",
+			"truss_3d",
+			"corot_truss_3d",
+			"elastic_beam_3d",
+			"timoshenko_beam_3d",
+			"shell_mitc4_3d",
+			"dkt3_3d",
+			"zerolength_3d",
 		},
 	})
 }

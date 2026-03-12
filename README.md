@@ -97,11 +97,16 @@ type Element interface {
 
 | Package | Type | Nodes | DOFs | Integration | Notes |
 |---------|------|-------|------|-------------|-------|
-| `element/truss/` | `Truss3D` | 2 | 6 | Analytical | 3D bar element, axial only |
+| `element/truss/` | `Truss3D` | 2 | 6 | Analytical | 3D bar element, axial only (3 DOF/node) |
+| `element/truss/` | `Truss2D` | 2 | 4 | Analytical | 2D bar element, axial only (2 DOF/node: UX, UY) |
 | `element/truss/` | `CorotTruss` | 2 | 6 | Corotational | Geometrically nonlinear truss |
 | `element/frame/` | `ElasticBeam3D` | 2 | 12 | Analytical | Euler-Bernoulli 3D beam (6 DOF/node) |
+| `element/frame/` | `ElasticBeam2D` | 2 | 6 | Analytical | Euler-Bernoulli 2D beam for plane frames (3 DOF/node: UX, UY, RZ) |
 | `element/frame/` | `TimoshenkoBeam3D` | 2 | 12 | Analytical | Timoshenko 3D beam — shear-deformable (6 DOF/node) |
+| `element/frame/` | `TimoshenkoBeam2D` | 2 | 6 | Analytical | Timoshenko 2D beam — shear-deformable for plane frames (3 DOF/node) |
 | `element/quad/` | `Quad4` | 4 | 8 | 2×2 Gauss | Plane stress or plane strain |
+| `element/quad/` | `Tri3` | 3 | 6 | Exact (constant B) | CST — constant strain triangle, plane stress/strain |
+| `element/quad/` | `Tri6` | 6 | 12 | 3-pt triangle | LST — linear strain triangle, plane stress/strain |
 | `element/shell/` | `ShellMITC4` | 4 | 24 | 2×2 + SRI | Flat shell: membrane + bending, 6 DOF/node |
 | `element/shell/` | `DKT3` | 3 | 18 | Triangular (area-constant) | Thin plate bending (Discrete Kirchhoff style), active DOFs: UZ/RX/RY |
 
@@ -150,7 +155,7 @@ dom.Assemble()
 dom.ApplyDirichletBC()
 ```
 
-**DOF auto-detection**: `Assemble()` scans all elements and sets `DOFPerNode = max(DOFPerNode across elements)`. Pure solid/truss models use 3 DOF/node; models with beams or shells use 6 DOF/node.
+**DOF auto-detection**: `Assemble()` scans all elements and sets `DOFPerNode = max(DOFPerNode across elements)`. Pure plane-stress/strain models (Tri3, Tri6, Quad4) and Truss2D use 2 DOF/node; solid/truss-3D models use 3 DOF/node; plane frames (ElasticBeam2D, TimoshenkoBeam2D) use 3 DOF/node; models with 3D beams or shells use 6 DOF/node.
 
 **Dirichlet BCs**: applied by the penalty-free row/column zeroing method (K[gdof,:] = 0, K[:,gdof] = 0, K[gdof,gdof] = 1, F[gdof] = value). Non-zero prescribed displacements set `bc.Value ≠ 0`.
 
@@ -159,7 +164,7 @@ dom.ApplyDirichletBC()
 | Method | Description | Supported elements |
 |--------|-------------|-------------------|
 | `ApplyLoad(node, dof, value)` | Concentrated force or moment | All |
-| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `TimoshenkoBeam3D` |
+| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `ElasticBeam2D`, `TimoshenkoBeam3D`, `TimoshenkoBeam2D` |
 | `AddSurfacePressure(faceNodes[4], P)` | Uniform pressure on quad face (2×2 Gauss) | Any 4 nodes |
 | `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | `Tet4` (exact), `Hexa8` (Gauss) |
 
@@ -329,18 +334,24 @@ On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
 | `"tet10"` | 10 | `material` | — |
 | `"brick20"` | 20 | `material` | — |
 | `"truss3d"` | 2 | `E`, `A` | — |
+| `"truss2d"` | 2 | `E`, `A` | 2 DOF/node (UX, UY) |
 | `"corot_truss"` | 2 | `E`, `A` | — |
 | `"elastic_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | — |
+| `"elastic_beam2d"` | 2 | `E`, `A`, `Iz` | 3 DOF/node (UX, UY, RZ) |
 | `"timoshenko_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | `Asy`, `Asz` |
+| `"timoshenko_beam2d"` | 2 | `E`, `G`, `A`, `Iz` | `Asy`; 3 DOF/node (UX, UY, RZ) |
 | `"shell_mitc4"` | 4 | `E`, `nu`, `thickness` | — |
 | `"dkt3"` | 3 | `E`, `nu`, `thickness` | alias: `"discrete_kirchhoff_triangle"` |
+| `"quad4"` | 4 | `E`, `nu`, `thickness` | `plane_type`: `"stress"` (default) or `"strain"` |
+| `"tri3"` | 3 | `E`, `nu`, `thickness` | CST; `plane_type`: `"stress"` or `"strain"` |
+| `"tri6"` | 6 | `E`, `nu`, `thickness` | LST; `plane_type`: `"stress"` or `"strain"` |
 | `"zerolength"` | 2 | `springs` (array of 6 stiffnesses: kUX..kRZ) | — |
 
 Solid elements (`tet4`, `hexa8`, `tet10`, `brick20`) require a `"material"` string referencing an entry in `"materials"`.
 
 #### Timoshenko beam — shear correction
 
-`timoshenko_beam3d` shares the same DOF layout and JSON fields as `elastic_beam3d` but accounts for transverse shear deformation via the shear-flexibility parameter:
+`timoshenko_beam3d` and `timoshenko_beam2d` share the same DOF layout and JSON fields as their Euler-Bernoulli counterparts but account for transverse shear deformation via the shear-flexibility parameter:
 
 ```
 Φ = 12·E·I / (G·As·L²)
@@ -348,7 +359,7 @@ Solid elements (`tet4`, `hexa8`, `tet10`, `brick20`) require a `"material"` stri
 
 where `As = κ·A` is the effective shear area (`κ` = shear correction factor). The stiffness matrix reduces to the Euler-Bernoulli matrix when `Φ → 0` (rigid shear, slender beam).
 
-Shear areas in JSON (`Asy` for bending in the x-y plane, `Asz` for the x-z plane):
+Shear areas in JSON (`Asy` for bending in the x-y plane, `Asz` for the x-z plane — 3D only):
 
 ```json
 {

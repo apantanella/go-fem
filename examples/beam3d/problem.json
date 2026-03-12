@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "_units": "m, N, Pa (SI base units). E=200 GPa (steel).",
   "_problem": "Cantilever beam: L=10 m, 1×1 m square cross-section, fixed at x=0, tip load P=-1000 N in -Z.",
   "_mesh": "2×2×2 Hexa8 elements (8 solids, 27 nodes). From convergence study in beam3d/main.go.",
@@ -18,14 +19,14 @@
     [0, 1, 1], [5, 1, 1], [10, 1, 1]
   ],
   "elements": [
-    {"type": "hexa8", "material": "steel", "nodes": [0, 1, 4, 3, 9, 10, 13, 12]},
-    {"type": "hexa8", "material": "steel", "nodes": [1, 2, 5, 4, 10, 11, 14, 13]},
-    {"type": "hexa8", "material": "steel", "nodes": [3, 4, 7, 6, 12, 13, 16, 15]},
-    {"type": "hexa8", "material": "steel", "nodes": [4, 5, 8, 7, 13, 14, 17, 16]},
-    {"type": "hexa8", "material": "steel", "nodes": [9, 10, 13, 12, 18, 19, 22, 21]},
-    {"type": "hexa8", "material": "steel", "nodes": [10, 11, 14, 13, 19, 20, 23, 22]},
-    {"type": "hexa8", "material": "steel", "nodes": [12, 13, 16, 15, 21, 22, 25, 24]},
-    {"type": "hexa8", "material": "steel", "nodes": [13, 14, 17, 16, 22, 23, 26, 25]}
+    {"type": "hexa8_3d", "material": "steel", "nodes": [0, 1, 4, 3, 9, 10, 13, 12]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [1, 2, 5, 4, 10, 11, 14, 13]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [3, 4, 7, 6, 12, 13, 16, 15]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [4, 5, 8, 7, 13, 14, 17, 16]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [9, 10, 13, 12, 18, 19, 22, 21]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [10, 11, 14, 13, 19, 20, 23, 22]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [12, 13, 16, 15, 21, 22, 25, 24]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [13, 14, 17, 16, 22, 23, 26, 25]}
   ],
   "boundary_conditions": [
     {"node": 0, "dofs": [0, 1, 2]},

@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "materials": [
     {"id": "aluminum", "type": "isotropic_linear", "E": 70000, "nu": 0.33}
   ],
@@ -11,9 +12,9 @@
     [1, 0, 1]
   ],
   "elements": [
-    {"type": "tet4", "material": "aluminum", "nodes": [0,1,2,3]},
-    {"type": "tet4", "material": "aluminum", "nodes": [1,4,2,5]},
-    {"type": "tet4", "material": "aluminum", "nodes": [1,2,3,5]}
+    {"type": "tet4_3d", "material": "aluminum", "nodes": [0,1,2,3]},
+    {"type": "tet4_3d", "material": "aluminum", "nodes": [1,4,2,5]},
+    {"type": "tet4_3d", "material": "aluminum", "nodes": [1,2,3,5]}
   ],
   "boundary_conditions": [
     {"node": 0, "dofs": [0,1,2]},

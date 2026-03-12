@@ -14,6 +14,16 @@ type BeamSection3D struct {
 	Asz float64 // Effective shear area in local z (for bending in xz plane)
 }
 
+// BeamSection2D holds properties for a 2D (plane frame) beam.
+type BeamSection2D struct {
+	A  float64 // Cross-sectional area
+	Iz float64 // Moment of inertia about local z-axis (bending in xy plane)
+
+	// Shear area for Timoshenko beam (Asy = κ·A).
+	// If zero, defaults to 5/6·A.
+	Asy float64
+}
+
 // ShellSection holds properties for shell/plate elements.
 type ShellSection struct {
 	Thickness float64 // Shell thickness

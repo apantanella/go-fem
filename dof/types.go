@@ -43,6 +43,27 @@ func Translational3D(nNodes int) []Type {
 	return out
 }
 
+// Translational2D returns [UX, UY] repeated n times (for n nodes).
+func Translational2D(nNodes int) []Type {
+	out := make([]Type, 2*nNodes)
+	for i := 0; i < nNodes; i++ {
+		out[2*i+0] = UX
+		out[2*i+1] = UY
+	}
+	return out
+}
+
+// PlaneFrame returns [UX, UY, RZ] repeated n times (for n nodes).
+func PlaneFrame(nNodes int) []Type {
+	out := make([]Type, 3*nNodes)
+	for i := 0; i < nNodes; i++ {
+		out[3*i+0] = UX
+		out[3*i+1] = UY
+		out[3*i+2] = RZ
+	}
+	return out
+}
+
 // Full6D returns [UX, UY, UZ, RX, RY, RZ] repeated n times (for n nodes).
 func Full6D(nNodes int) []Type {
 	out := make([]Type, 6*nNodes)

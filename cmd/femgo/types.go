@@ -5,6 +5,7 @@ package main
 // ---------------------------------------------------------------------------
 
 type ProblemInput struct {
+	Dimensions         string          `json:"dimensions,omitempty"` // "2D" | "3D" (optional – triggers compatibility check)
 	Materials          []MaterialInput `json:"materials"`
 	Nodes              [][3]float64    `json:"nodes"`
 	Elements           []ElementInput  `json:"elements"`
@@ -178,6 +179,7 @@ type InfoOutput struct {
 	NumDOFs     int    `json:"num_dofs"`
 	DOFPerNode  int    `json:"dof_per_node"`
 	Solver      string `json:"solver"`
+	Dimensions  string `json:"dimensions,omitempty"` // "2D" | "3D" as declared in the request
 }
 
 type DisplacementOutput struct {

@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "_units": "N, mm, MPa (N/mm²) — consistent SI-derived system. E=210000 MPa = steel.",
   "materials": [],
   "nodes": [
@@ -8,7 +9,7 @@
   ],
   "elements": [
     {
-      "type": "elastic_beam3d",
+      "type": "elastic_beam_3d",
       "nodes": [0, 1],
       "E": 210000, "G": 80769,
       "A": 10000, "Iy": 8333333, "Iz": 8333333, "J": 14062500,
@@ -16,7 +17,7 @@
       "_section": "100×100 mm square solid: A=10000 mm², Iz=Iy=b·h³/12≈8.33e6 mm⁴, J≈0.1406·a⁴"
     },
     {
-      "type": "elastic_beam3d",
+      "type": "elastic_beam_3d",
       "nodes": [1, 2],
       "E": 210000, "G": 80769,
       "A": 10000, "Iy": 8333333, "Iz": 8333333, "J": 14062500,

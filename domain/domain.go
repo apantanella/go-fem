@@ -68,8 +68,16 @@ type Domain struct {
 	BodyForces   []BodyForce
 
 	// DOFPerNode is auto-detected during Assemble:
-	// 3 for pure solid/truss, 6 when beams/shells are present.
+	// 2 for pure plane stress/strain, 3 for solids/truss or plane frames,
+	// 6 when 3D beams/shells are present.
 	DOFPerNode int
+
+	// dofOffset maps each dof.Type enum value (0–5) to a consecutive offset
+	// within the node's DOF block. A value of -1 means the DOF type is
+	// inactive. Built during Assemble.
+	dofOffset [6]int
+	// reverseDOF maps consecutive offset back to dof.Type enum value.
+	reverseDOF []int
 
 	K *mat.Dense    // global stiffness (assembled)
 	F *mat.VecDense // global force vector
@@ -141,14 +149,34 @@ func (d *Domain) NumDOF() int {
 }
 
 // Assemble constructs the global K and F.
-// Auto-detects DOFPerNode from the maximum across all elements.
+// Auto-detects DOFPerNode from the active DOF types across all elements.
 func (d *Domain) Assemble() {
-	// Auto-detect DOFs per node
-	d.DOFPerNode = 3
+	// Collect active DOF types across all elements.
+	var active [6]bool
 	for _, elem := range d.Elements {
-		if dpn := elem.DOFPerNode(); dpn > d.DOFPerNode {
-			d.DOFPerNode = dpn
+		for _, dt := range elem.DOFTypes() {
+			active[int(dt)] = true
 		}
+	}
+
+	// Build consecutive mapping: dof.Type enum → offset 0..n-1
+	for i := range d.dofOffset {
+		d.dofOffset[i] = -1
+	}
+	idx := 0
+	d.reverseDOF = nil
+	for i := 0; i < 6; i++ {
+		if active[i] {
+			d.dofOffset[i] = idx
+			d.reverseDOF = append(d.reverseDOF, i)
+			idx++
+		}
+	}
+	d.DOFPerNode = idx
+	if d.DOFPerNode == 0 {
+		d.DOFPerNode = 3
+		d.dofOffset = [6]int{0, 1, 2, -1, -1, -1}
+		d.reverseDOF = []int{0, 1, 2}
 	}
 
 	dpn := d.DOFPerNode
@@ -164,12 +192,12 @@ func (d *Domain) Assemble() {
 		eldof := elem.NumDOF()
 		elemDPN := elem.DOFPerNode()
 
-		// Build local → global DOF map using DOF types
+		// Build local → global DOF map using DOF type offsets
 		globalDOFs := make([]int, eldof)
 		for i, dt := range dofTypes {
 			nodeIdx := i / elemDPN
 			nodeID := nids[nodeIdx]
-			globalDOFs[i] = nodeID*dpn + int(dt)
+			globalDOFs[i] = nodeID*dpn + d.dofOffset[int(dt)]
 		}
 
 		for i := 0; i < eldof; i++ {
@@ -183,7 +211,11 @@ func (d *Domain) Assemble() {
 
 	// --- Nodal loads ---
 	for _, load := range d.Loads {
-		gdof := load.NodeID*dpn + load.DOF
+		off := d.dofOffset[load.DOF]
+		if off < 0 {
+			continue
+		}
+		gdof := load.NodeID*dpn + off
 		d.F.SetVec(gdof, d.F.AtVec(gdof)+load.Value)
 	}
 
@@ -215,16 +247,14 @@ func (d *Domain) Assemble() {
 					gt[1] += dNdt[i] * xf[i][1]
 					gt[2] += dNdt[i] * xf[i][2]
 				}
-				// outward normal × dA (from cross product gs × gt)
 				nx := gs[1]*gt[2] - gs[2]*gt[1]
 				ny := gs[2]*gt[0] - gs[0]*gt[2]
 				nz := gs[0]*gt[1] - gs[1]*gt[0]
 
 				for i, nid := range sp.FaceNodes {
-					// P > 0 compressive: force = -P·N_i·n
-					d.F.SetVec(nid*dpn+int(dof.UX), d.F.AtVec(nid*dpn+int(dof.UX))-sp.P*N[i]*nx)
-					d.F.SetVec(nid*dpn+int(dof.UY), d.F.AtVec(nid*dpn+int(dof.UY))-sp.P*N[i]*ny)
-					d.F.SetVec(nid*dpn+int(dof.UZ), d.F.AtVec(nid*dpn+int(dof.UZ))-sp.P*N[i]*nz)
+					d.F.SetVec(nid*dpn+d.dofOffset[int(dof.UX)], d.F.AtVec(nid*dpn+d.dofOffset[int(dof.UX)])-sp.P*N[i]*nx)
+					d.F.SetVec(nid*dpn+d.dofOffset[int(dof.UY)], d.F.AtVec(nid*dpn+d.dofOffset[int(dof.UY)])-sp.P*N[i]*ny)
+					d.F.SetVec(nid*dpn+d.dofOffset[int(dof.UZ)], d.F.AtVec(nid*dpn+d.dofOffset[int(dof.UZ)])-sp.P*N[i]*nz)
 				}
 			}
 		}
@@ -247,7 +277,7 @@ func (d *Domain) Assemble() {
 		for i, dt := range dofTypes {
 			nodeIdx := i / elemDPN
 			nodeID := nids[nodeIdx]
-			gdof := nodeID*dpn + int(dt)
+			gdof := nodeID*dpn + d.dofOffset[int(dt)]
 			d.F.SetVec(gdof, d.F.AtVec(gdof)+fe.AtVec(i))
 		}
 	}
@@ -269,7 +299,7 @@ func (d *Domain) Assemble() {
 		for i, dt := range dofTypes {
 			nodeIdx := i / elemDPN
 			nodeID := nids[nodeIdx]
-			gdof := nodeID*dpn + int(dt)
+			gdof := nodeID*dpn + d.dofOffset[int(dt)]
 			d.F.SetVec(gdof, d.F.AtVec(gdof)+fe.AtVec(i))
 		}
 	}
@@ -280,7 +310,11 @@ func (d *Domain) ApplyDirichletBC() {
 	dpn := d.DOFPerNode
 	ndof := len(d.Nodes) * dpn
 	for _, bc := range d.BCs {
-		gdof := bc.NodeID*dpn + bc.DOF
+		off := d.dofOffset[bc.DOF]
+		if off < 0 {
+			continue
+		}
+		gdof := bc.NodeID*dpn + off
 		if gdof >= ndof {
 			continue
 		}
@@ -300,7 +334,8 @@ func (d *Domain) SetDisplacements(U *mat.VecDense) [][6]float64 {
 	disp := make([][6]float64, len(d.Nodes))
 	for i := range d.Nodes {
 		for j := 0; j < dpn; j++ {
-			disp[i][j] = U.AtVec(i*dpn + j)
+			enumIdx := d.reverseDOF[j]
+			disp[i][enumIdx] = U.AtVec(i*dpn + j)
 		}
 	}
 	return disp
@@ -319,7 +354,7 @@ func (d *Domain) ElementDisp(elem element.Element, U *mat.VecDense) []float64 {
 	for i, dt := range dofTypes {
 		nodeIdx := i / elemDPN
 		nodeID := nids[nodeIdx]
-		disp[i] = U.AtVec(nodeID*dpn + int(dt))
+		disp[i] = U.AtVec(nodeID*dpn + d.dofOffset[int(dt)])
 	}
 	return disp
 }

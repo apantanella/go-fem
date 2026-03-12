@@ -1,4 +1,5 @@
 {
+  "dimensions": "3D",
   "materials": [
     {"id": "steel", "type": "isotropic_linear", "E": 200000, "nu": 0.3}
   ],
@@ -9,10 +10,10 @@
     [0.0, 1.0, 1.0], [2.5, 1.0, 1.0], [5.0, 1.0, 1.0], [7.5, 1.0, 1.0], [10.0, 1.0, 1.0]
   ],
   "elements": [
-    {"type": "hexa8", "material": "steel", "nodes": [0,1,6,5,10,11,16,15]},
-    {"type": "hexa8", "material": "steel", "nodes": [1,2,7,6,11,12,17,16]},
-    {"type": "hexa8", "material": "steel", "nodes": [2,3,8,7,12,13,18,17]},
-    {"type": "hexa8", "material": "steel", "nodes": [3,4,9,8,13,14,19,18]}
+    {"type": "hexa8_3d", "material": "steel", "nodes": [0,1,6,5,10,11,16,15]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [1,2,7,6,11,12,17,16]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [2,3,8,7,12,13,18,17]},
+    {"type": "hexa8_3d", "material": "steel", "nodes": [3,4,9,8,13,14,19,18]}
   ],
   "boundary_conditions": [
     {"node": 0,  "dofs": [0,1,2]},

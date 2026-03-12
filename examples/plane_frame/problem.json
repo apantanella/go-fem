@@ -1,0 +1,52 @@
+{
+  "dimensions": "2D",
+  "description": "Portal frame 2D — two columns + one beam under uniform gravity load",
+  "notes": "Uses elastic_beam2d elements (3 DOF/node: UX, UY, RZ). Nodes in XY plane.",
+
+  "materials": [],
+
+  "nodes": [
+    [0, 0, 0],
+    [0, 4, 0],
+    [6, 4, 0],
+    [6, 0, 0]
+  ],
+
+  "elements": [
+    {
+      "type": "elastic_beam_2d",
+      "nodes": [0, 1],
+      "E": 210000,
+      "A": 53.8,
+      "Iz": 8356
+    },
+    {
+      "type": "elastic_beam_2d",
+      "nodes": [1, 2],
+      "E": 210000,
+      "A": 53.8,
+      "Iz": 8356
+    },
+    {
+      "type": "elastic_beam_2d",
+      "nodes": [3, 2],
+      "E": 210000,
+      "A": 53.8,
+      "Iz": 8356
+    }
+  ],
+
+  "boundary_conditions": [
+    { "node": 0, "dofs": [0, 1, 2] },
+    { "node": 3, "dofs": [0, 1, 2] }
+  ],
+
+  "loads": [
+    {
+      "type": "beam_dist",
+      "element": 1,
+      "dir": [0, -1, 0],
+      "intensity": 20
+    }
+  ]
+}

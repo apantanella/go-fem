@@ -24,10 +24,12 @@ func main() {
 	mux.HandleFunc("/", handleInfo)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/solve", handleSolve)
+	mux.HandleFunc("/elements", handleElements)
 
 	log.Printf("go-fem API server listening on %s", *addr)
-	log.Printf("  POST /solve   – solve a FEM problem")
-	log.Printf("  GET  /health  – health check")
-	log.Printf("  GET  /        – API info")
+	log.Printf("  POST /solve    – solve a FEM problem")
+	log.Printf("  GET  /elements – list elements by dimension")
+	log.Printf("  GET  /health   – health check")
+	log.Printf("  GET  /         – API info")
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
