@@ -7,15 +7,17 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 `go-fem` solves linear static structural problems via a layered architecture that mirrors OpenSees: materials → elements → domain → analysis. Problems are defined programmatically through the Go API or submitted as JSON to the built-in HTTP server.
 
 **Key capabilities:**
-- 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, and spring elements
+- 2D and 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, and spring/connector elements
 - Isotropic and orthotropic linear elastic materials
-- Automatic DOF detection (3 or 6 per node) based on element types
+- Automatic DOF detection (2, 3, or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
 - Cholesky and LU linear solvers
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
-- JSON HTTP API for language-agnostic integration
+- Optional `"dimensions"` field (`"2D"` / `"3D"`) validates element compatibility at solve time
+- JSON HTTP API for language-agnostic integration, including `GET /elements` grouped by dimension
 - Consistent N-mm-MPa unit system throughout all examples
+- All element type strings use explicit `_2d`/`_3d` suffix; legacy names (without suffix) remain as backward-compatible aliases
 
 ---
 
@@ -105,17 +107,22 @@ type Element interface {
 | `element/frame/` | `TimoshenkoBeam3D` | 2 | 12 | Analytical | Timoshenko 3D beam — shear-deformable (6 DOF/node) |
 | `element/frame/` | `TimoshenkoBeam2D` | 2 | 6 | Analytical | Timoshenko 2D beam — shear-deformable for plane frames (3 DOF/node) |
 | `element/quad/` | `Quad4` | 4 | 8 | 2×2 Gauss | Plane stress or plane strain |
+| `element/quad/` | `Quad8` | 8 | 16 | 3×3 Gauss | Serendipity 8-node quad, plane stress or strain — accurate near stress concentrations |
 | `element/quad/` | `Tri3` | 3 | 6 | Exact (constant B) | CST — constant strain triangle, plane stress/strain |
 | `element/quad/` | `Tri6` | 6 | 12 | 3-pt triangle | LST — linear strain triangle, plane stress/strain |
 | `element/shell/` | `ShellMITC4` | 4 | 24 | 2×2 + SRI | Flat shell: membrane + bending, 6 DOF/node |
-| `element/shell/` | `DKT3` | 3 | 18 | Triangular (area-constant) | Thin plate bending (Discrete Kirchhoff style), active DOFs: UZ/RX/RY |
+| `element/shell/` | `DiscreteKirchhoffTriangle` (`DKT3`) | 3 | 18 | Area-constant | Thin plate bending (Discrete Kirchhoff), active DOFs: UZ/RX/RY per node |
 
 ### Connector Elements
 
-| Package | Type | Nodes | DOFs | Notes |
-|---------|------|-------|------|-------|
-| `element/zerolength/` | `ZeroLength` | 2 | 12 | 6-DOF spring connector (6 DOF/node) |
-| `element/zerolength/` | `ZeroLength3DOF` | 2 | 6 | 3-DOF spring connector (3 DOF/node) |
+| Package | Type | Nodes | DOFs | DOF/node | JSON `"type"` | Notes |
+|---------|------|-------|------|----------|--------------|-------|
+| `element/zerolength/` | `ZeroLength` | 2 | 12 | 6 (UX..RZ) | `zerolength_3d` | Full 6-DOF spring connector in 3D |
+| `element/zerolength/` | `ZeroLength3DOF` | 2 | 6 | 3 (UX,UY,UZ) | `zerolength_trans_3d` | 3D translational spring (no rotation DOFs) |
+| `element/zerolength/` | `ZeroLength2D` | 2 | 4 | 2 (UX,UY) | `zerolength_2d` | 2D translational spring connector |
+| `element/zerolength/` | `ZeroLength2DFrame` | 2 | 6 | 3 (UX,UY,RZ) | `zerolength_frame_2d` | 2D plane-frame spring connector (UX+UY+RZ) |
+
+All spring/connector elements output a `spring_forces` object in the response (see response format below). Spring stiffnesses are passed in the `"springs"` JSON array — only the first N entries are used for an N-DOF-per-node element.
 
 ---
 
@@ -231,14 +238,16 @@ go build -o femgo ./cmd/femgo
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/solve` | Submit a FEM problem (JSON body), receive displacements |
+| `POST` | `/solve` | Submit a FEM problem (JSON body), receive displacements and element forces |
 | `GET` | `/health` | Health check: `{"status":"ok","service":"go-fem"}` |
+| `GET` | `/elements` | List supported elements grouped by dimension (`"2D"` / `"3D"`) |
 | `GET` | `/` | API info: version, supported elements, materials, solvers |
 
 ### POST /solve – Request Format
 
 ```json
 {
+  "dimensions": "2D",
   "materials": [
     {"id": "steel", "type": "isotropic_linear", "E": 200000, "nu": 0.3}
   ],
@@ -247,7 +256,7 @@ go build -o femgo ./cmd/femgo
     [1, 0, 0]
   ],
   "elements": [
-    {"type": "truss3d", "nodes": [0, 1], "E": 200000, "A": 0.01}
+    {"type": "truss_3d", "nodes": [0, 1], "E": 200000, "A": 0.01}
   ],
   "boundary_conditions": [
     {"node": 0, "dofs": [0, 1, 2]},
@@ -260,7 +269,9 @@ go build -o femgo ./cmd/femgo
 }
 ```
 
-**DOF indices**: `0=UX`, `1=UY`, `2=UZ`, `3=RX`, `4=RY`, `5=RZ`
+**`"dimensions"`**: optional `"2D"` or `"3D"`. When set, every element in the problem is validated to belong to that dimensionality and an error is returned on mismatch. Echoed back in the `info` response field.
+
+**Element naming**: all element types use an explicit `_2d` or `_3d` suffix (e.g. `"truss_3d"`, `"elastic_beam_2d"`). Legacy names without a suffix (e.g. `"truss3d"`, `"elastic_beam3d"`) are accepted as backward-compatible aliases.
 
 **Solver options**: `"cholesky"` (default) or `"lu"`
 
@@ -296,11 +307,15 @@ All load types use a `"type"` discriminator field. Omitting `"type"` is equivale
     "num_elements": 1,
     "num_dofs": 6,
     "dof_per_node": 3,
-    "solver": "cholesky"
+    "solver": "cholesky",
+    "dimensions": "3D"
   },
   "displacements": [
     {"node": 0, "ux": 0.0, "uy": 0.0, "uz": 0.0},
     {"node": 1, "ux": 2.5e-4, "uy": 0.0, "uz": 0.0}
+  ],
+  "element_forces": [
+    {"id": 0, "type": "truss_3d", "N": 5000.0, "sigma": 50.0}
   ],
   "summary": {
     "max_abs_displacement": {"node": 1, "component": "ux", "value": 2.5e-4}
@@ -309,7 +324,21 @@ All load types use a `"type"` discriminator field. Omitting `"type"` is equivale
 }
 ```
 
-On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
+`element_forces` is always populated. The fields present depend on element type:
+
+| Field | Element types |
+|-------|---------------|
+| `N`, `sigma` | `truss_3d`, `corot_truss_3d`, `truss_2d` — axial force and stress |
+| `end_i`, `end_j` | beam elements — 6-component cross-section forces in local frame (N, Vy, Vz, Mx, My, Mz) |
+| `stress` | solid elements (`tet4_3d`, `hexa8_3d`, …) and 2D quads — centroidal Cauchy stress + von Mises |
+| `shell_forces` | `shell_mitc4_3d` — in-plane resultants Nx, Ny, Nxy and bending moments Mx, My, Mxy per unit length |
+| `spring_forces` | all `zerolength_*` types — spring forces/moments (tension positive). Fields: `Fx`, `Fy`, `Fz`, `Mx`, `My`, `Mz`; only active components are included |
+
+Example `spring_forces` for a `zerolength_frame_2d` (UX + UY + RZ springs):
+
+```json
+{"id": 5, "type": "zerolength_frame_2d", "spring_forces": {"Fx": 120.5, "Fy": -80.0, "Mz": 0.0}}
+```
 
 ### Material types in JSON
 
@@ -327,27 +356,35 @@ On error (`"success": false`), the response has HTTP 422 and an `"error"` field.
 
 ### Element types in JSON
 
-| `"type"` | Nodes | Required fields | Optional |
-|----------|-------|-----------------|----------|
-| `"tet4"` | 4 | `material` | — |
-| `"hexa8"` | 8 | `material` | — |
-| `"tet10"` | 10 | `material` | — |
-| `"brick20"` | 20 | `material` | — |
-| `"truss3d"` | 2 | `E`, `A` | — |
-| `"truss2d"` | 2 | `E`, `A` | 2 DOF/node (UX, UY) |
-| `"corot_truss"` | 2 | `E`, `A` | — |
-| `"elastic_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | — |
-| `"elastic_beam2d"` | 2 | `E`, `A`, `Iz` | 3 DOF/node (UX, UY, RZ) |
-| `"timoshenko_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | `Asy`, `Asz` |
-| `"timoshenko_beam2d"` | 2 | `E`, `G`, `A`, `Iz` | `Asy`; 3 DOF/node (UX, UY, RZ) |
-| `"shell_mitc4"` | 4 | `E`, `nu`, `thickness` | — |
-| `"dkt3"` | 3 | `E`, `nu`, `thickness` | alias: `"discrete_kirchhoff_triangle"` |
-| `"quad4"` | 4 | `E`, `nu`, `thickness` | `plane_type`: `"stress"` (default) or `"strain"` |
-| `"tri3"` | 3 | `E`, `nu`, `thickness` | CST; `plane_type`: `"stress"` or `"strain"` |
-| `"tri6"` | 6 | `E`, `nu`, `thickness` | LST; `plane_type`: `"stress"` or `"strain"` |
-| `"zerolength"` | 2 | `springs` (array of 6 stiffnesses: kUX..kRZ) | — |
+All types use an explicit `_2d` or `_3d` suffix. The bare names (e.g. `"tet4"`, `"truss3d"`) are accepted as backward-compatible aliases.
 
-Solid elements (`tet4`, `hexa8`, `tet10`, `brick20`) require a `"material"` string referencing an entry in `"materials"`.
+| `"type"` | Alias | Nodes | Required fields | Notes |
+|----------|-------|-------|-----------------|-------|
+| `"tet4_3d"` | `"tet4"` | 4 | `material` | |
+| `"hexa8_3d"` | `"hexa8"` | 8 | `material` | |
+| `"tet10_3d"` | `"tet10"` | 10 | `material` | |
+| `"brick20_3d"` | `"brick20"` | 20 | `material` | |
+| `"truss_3d"` | `"truss3d"` | 2 | `E`, `A` | 3 DOF/node (UX,UY,UZ) |
+| `"truss_2d"` | `"truss2d"` | 2 | `E`, `A` | 2 DOF/node (UX,UY) |
+| `"corot_truss_3d"` | `"corot_truss"` | 2 | `E`, `A` | Geometrically nonlinear, 3 DOF/node |
+| `"elastic_beam_3d"` | `"elastic_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | 6 DOF/node |
+| `"elastic_beam_2d"` | `"elastic_beam2d"` | 2 | `E`, `A`, `Iz` | 3 DOF/node (UX,UY,RZ) |
+| `"timoshenko_beam_3d"` | `"timoshenko_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `vec_xz` | optional: `Asy`, `Asz`; 6 DOF/node |
+| `"timoshenko_beam_2d"` | `"timoshenko_beam2d"` | 2 | `E`, `G`, `A`, `Iz` | optional: `Asy`; 3 DOF/node |
+| `"shell_mitc4_3d"` | `"shell_mitc4"` | 4 | `E`, `nu`, `thickness` | 6 DOF/node |
+| `"dkt3_3d"` | `"dkt3"`, `"discrete_kirchhoff_triangle"` | 3 | `E`, `nu`, `thickness` | active DOFs: UZ/RX/RY; 6 DOF/node global layout |
+| `"quad4_2d"` | `"quad4"` | 4 | `E`, `nu`, `thickness` | `plane_type`: `"stress"` (default) or `"strain"` |
+| `"quad8_2d"` | `"quad8"` | 8 | `E`, `nu`, `thickness` | 3×3 Gauss; `plane_type`: `"stress"` or `"strain"` |
+| `"tri3_2d"` | `"tri3"` | 3 | `E`, `nu`, `thickness` | CST; `plane_type`: `"stress"` or `"strain"` |
+| `"tri6_2d"` | `"tri6"` | 6 | `E`, `nu`, `thickness` | LST; `plane_type`: `"stress"` or `"strain"` |
+| `"zerolength_3d"` | `"zerolength"` | 2 | `springs[0..5]`: [kUX,kUY,kUZ,kRX,kRY,kRZ] | 6 DOF/node, all 6 spring stiffnesses |
+| `"zerolength_trans_3d"` | — | 2 | `springs[0..2]`: [kUX,kUY,kUZ] | 3 DOF/node, translational only |
+| `"zerolength_2d"` | — | 2 | `springs[0..1]`: [kUX,kUY] | 2 DOF/node, 2D translational |
+| `"zerolength_frame_2d"` | — | 2 | `springs[0..2]`: [kUX,kUY,kRZ] | 3 DOF/node, 2D plane-frame |
+
+Solid elements require a `"material"` string referencing an entry in `"materials"`. All other elements take direct `E`, `G`, etc. parameters.
+
+Spring stiffness arrays are always JSON `"springs": [k0, k1, …, k5]` — unused entries beyond the element's DOF count are ignored.
 
 #### Timoshenko beam — shear correction
 
@@ -363,7 +400,7 @@ Shear areas in JSON (`Asy` for bending in the x-y plane, `Asz` for the x-z plane
 
 ```json
 {
-  "type": "timoshenko_beam3d",
+  "type": "timoshenko_beam_3d",
   "nodes": [0, 1],
   "E": 210000, "G": 80769,
   "A": 20000, "Iy": 66666667, "Iz": 66666667, "J": 50000000,
@@ -387,9 +424,9 @@ Typical shear correction factors:
 
 | L/h | Shear contribution | Recommendation |
 |-----|-------------------|----------------|
-| > 20 | < 1 % | `elastic_beam3d` is sufficient |
+| > 20 | < 1 % | `elastic_beam_3d` is sufficient |
 | 10–20 | 1–5 % | either element |
-| < 10 | > 5 % | use `timoshenko_beam3d` |
+| < 10 | > 5 % | use `timoshenko_beam_3d` |
 
 ---
 
@@ -419,17 +456,21 @@ curl -X POST http://localhost:8080/solve \
 
 | Directory | Element Type | Load type | Description |
 |-----------|-------------|-----------|-------------|
-| `examples/cantilever_beam/` | `Hexa8` | Nodal | 3D cantilever beam with tip point load |
-| `examples/single_hex8/` | `Hexa8` | Nodal | Single cube under uniaxial compression |
-| `examples/tet4_patch/` | `Tet4` | Nodal | Tetrahedral patch test (constant stress) |
-| `examples/bridge_load/` | `Truss3D` | Nodal | 2D Warren truss bridge under vertical load |
-| `examples/frame_portal/` | `ElasticBeam3D` | Nodal | Portal frame under lateral (sway) load |
-| `examples/beam3d/` | `ElasticBeam3D` | Nodal | Single 3D beam with end moment |
-| `examples/beam_with_dist_load/` | `ElasticBeam3D` | `beam_dist` | Two-span beam with UDL 1 kN/m, fixed ends |
-| `examples/pressure_on_cube/` | `Hexa8` | `surface_pressure` | Steel cube with uniform pressure on top face |
-| `examples/gravity_solid/` | `Hexa8` | `body_force` | Concrete cube under self-weight (gravity) |
-| `examples/ortho_cube/` | `Hexa8` | Nodal | Timber cube (orthotropic) under axial compression along grain |
-| `examples/timoshenko_deep_beam/` | `TimoshenkoBeam3D` | Nodal | Deep cantilever (L/h=2): shear adds 16 % to EB deflection |
+| `examples/cantilever_beam/` | `hexa8_3d` | Nodal | 3D cantilever beam with tip point load |
+| `examples/single_hex8/` | `hexa8_3d` | Nodal | Single cube under uniaxial compression |
+| `examples/tet4_patch/` | `tet4_3d` | Nodal | Tetrahedral patch test (constant stress) |
+| `examples/bridge_load/` | `truss_3d` | Nodal | 2D Warren truss bridge under vertical load |
+| `examples/frame_portal/` | `elastic_beam_3d` | Nodal | 3D portal frame under lateral (sway) load |
+| `examples/plane_frame/` | `elastic_beam_2d` | Nodal | 2D portal frame with gravity UDL on crossbeam |
+| `examples/truss2d/` | `truss_2d` | Nodal | Simple 2-bar 2D truss under vertical load |
+| `examples/beam3d/` | `elastic_beam_3d` | Nodal | Single 3D beam with end moment |
+| `examples/beam_with_dist_load/` | `elastic_beam_3d` | `beam_dist` | Two-span beam with UDL 1 kN/m, fixed ends |
+| `examples/pressure_on_cube/` | `hexa8_3d` | `surface_pressure` | Steel cube with uniform pressure on top face |
+| `examples/gravity_solid/` | `hexa8_3d` | `body_force` | Concrete cube under self-weight (gravity) |
+| `examples/ortho_cube/` | `hexa8_3d` | Nodal | Timber cube (orthotropic) under axial compression along grain |
+| `examples/timoshenko_deep_beam/` | `timoshenko_beam_3d` | Nodal | Deep cantilever (L/h=2): shear adds 16 % to EB deflection |
+| `examples/dkt3_tri_plate/` | `dkt3_3d` | Nodal | Single DKT3 triangle: clamped edge, point load + UDL equiv. variants |
+| `examples/tri_plane/` | `tri3_2d`, `tri6_2d` | Nodal | Plane-stress cantilever meshed with CST/LST triangles |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
@@ -439,13 +480,14 @@ A 6000 mm × 3000 mm portal frame (N-mm-MPa), fixed bases, lateral load 10 kN at
 
 ```json
 {
+  "dimensions": "3D",
   "nodes": [[0,0,0],[0,3000,0],[6000,3000,0],[6000,0,0]],
   "elements": [
-    {"type":"elastic_beam3d","nodes":[0,1],
+    {"type":"elastic_beam_3d","nodes":[0,1],
      "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]},
-    {"type":"elastic_beam3d","nodes":[1,2],
+    {"type":"elastic_beam_3d","nodes":[1,2],
      "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]},
-    {"type":"elastic_beam3d","nodes":[3,2],
+    {"type":"elastic_beam_3d","nodes":[3,2],
      "E":210000,"G":80769,"A":10000,"Iy":8333333,"Iz":8333333,"J":14062500,"vec_xz":[0,0,1]}
   ],
   "boundary_conditions": [
@@ -463,15 +505,16 @@ A 5-node Warren truss (N-mm-MPa), 7 members, 100 kN midspan downward load:
 
 ```json
 {
+  "dimensions": "3D",
   "nodes": [[0,0,0],[5000,0,0],[10000,0,0],[2500,3000,0],[7500,3000,0]],
   "elements": [
-    {"type":"truss3d","nodes":[0,1],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[1,2],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[0,3],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[1,3],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[1,4],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[2,4],"E":210000,"A":3000},
-    {"type":"truss3d","nodes":[3,4],"E":210000,"A":3000}
+    {"type":"truss_3d","nodes":[0,1],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[1,2],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[0,3],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[1,3],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[1,4],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[2,4],"E":210000,"A":3000},
+    {"type":"truss_3d","nodes":[3,4],"E":210000,"A":3000}
   ],
   "boundary_conditions": [
     {"node":0,"dofs":[0,1,2]},
@@ -491,9 +534,10 @@ A 400 mm × 200 mm deep cantilever (L/h = 2), tip load 10 kN. Shear deformation 
 
 ```json
 {
+  "dimensions": "3D",
   "nodes": [[0,0,0],[400,0,0]],
   "elements": [
-    {"type":"timoshenko_beam3d","nodes":[0,1],
+    {"type":"timoshenko_beam_3d","nodes":[0,1],
      "E":210000,"G":80769,"A":20000,
      "Iy":66666667,"Iz":66666667,"J":50000000,
      "Asy":16667,"Asz":16667,"vec_xz":[0,0,1]}
@@ -516,7 +560,7 @@ Expected tip deflection: **−0.01821 mm** (EB bending 0.01524 + shear 0.00297).
 go run ./validation
 ```
 
-### Results (March 11, 2026)
+### Results (March 12, 2026)
 
 | Case | Element | Numerical | Theoretical | Rel. Err (%) | Status |
 |------|---------|-----------|-------------|--------------|--------|

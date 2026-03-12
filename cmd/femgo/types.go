@@ -137,6 +137,9 @@ type ElementForcesOutput struct {
 
 	// Shell (shell_mitc4) — section resultants in local shell frame
 	ShellForces *ShellForcesOutput `json:"shell_forces,omitempty"`
+
+	// Spring elements (zerolength_*) — spring forces/moments (tension/CCW positive)
+	SpringForces *SpringForcesOutput `json:"spring_forces,omitempty"`
 }
 
 // BeamEndOutput holds the six cross-section forces at one beam end in local coords.
@@ -171,6 +174,17 @@ type ShellForcesOutput struct {
 	Mx  float64 `json:"Mx"`  // bending moment/unit length about local x
 	My  float64 `json:"My"`  // bending moment/unit length about local y
 	Mxy float64 `json:"Mxy"` // twisting moment/unit length
+}
+
+// SpringForcesOutput holds spring/connector forces and moments (tension/CCW positive).
+// Only the components active for the specific element type are populated.
+type SpringForcesOutput struct {
+	Fx *float64 `json:"Fx,omitempty"`
+	Fy *float64 `json:"Fy,omitempty"`
+	Fz *float64 `json:"Fz,omitempty"`
+	Mx *float64 `json:"Mx,omitempty"`
+	My *float64 `json:"My,omitempty"`
+	Mz *float64 `json:"Mz,omitempty"`
 }
 
 type InfoOutput struct {

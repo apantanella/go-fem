@@ -47,11 +47,13 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 			"tet4_3d", "hexa8_3d", "tet10_3d", "brick20_3d",
 			"truss_3d", "corot_truss_3d",
 			"elastic_beam_3d", "timoshenko_beam_3d",
-			"shell_mitc4_3d", "dkt3_3d", "zerolength_3d",
+			"shell_mitc4_3d", "dkt3_3d",
+			"zerolength_3d", "zerolength_trans_3d",
 			// 2D
 			"truss_2d",
 			"elastic_beam_2d", "timoshenko_beam_2d",
 			"quad4_2d", "quad8_2d", "tri3_2d", "tri6_2d",
+			"zerolength_2d", "zerolength_frame_2d",
 		},
 		"materials": []string{"isotropic_linear", "orthotropic_linear"},
 		"solvers":   []string{"cholesky", "lu"},
@@ -75,6 +77,8 @@ func handleElements(w http.ResponseWriter, _ *http.Request) {
 			"quad8_2d",
 			"tri3_2d",
 			"tri6_2d",
+			"zerolength_2d",
+			"zerolength_frame_2d",
 		},
 		"3D": []string{
 			"tet4_3d",
@@ -88,6 +92,7 @@ func handleElements(w http.ResponseWriter, _ *http.Request) {
 			"shell_mitc4_3d",
 			"dkt3_3d",
 			"zerolength_3d",
+			"zerolength_trans_3d",
 		},
 	})
 }

@@ -37,6 +37,7 @@ var elementDimension = map[string]string{
 	"shell_mitc4_3d": "3D", "shell_mitc4": "3D",
 	"dkt3_3d": "3D", "dkt3": "3D", "discrete_kirchhoff_triangle": "3D",
 	"zerolength_3d": "3D", "zerolength": "3D",
+	"zerolength_trans_3d": "3D",
 	// ── 2D elements ──────────────────────────────────────────────────────────
 	"truss_2d": "2D", "truss2d": "2D",
 	"elastic_beam_2d": "2D", "elastic_beam2d": "2D",
@@ -45,6 +46,8 @@ var elementDimension = map[string]string{
 	"quad8_2d": "2D", "quad8": "2D",
 	"tri3_2d": "2D", "tri3": "2D",
 	"tri6_2d": "2D", "tri6": "2D",
+	"zerolength_2d":       "2D",
+	"zerolength_frame_2d": "2D",
 }
 
 // elementCanonical maps any element type name (including old-style aliases) to the
@@ -61,13 +64,16 @@ var elementCanonical = map[string]string{
 	"shell_mitc4": "shell_mitc4_3d", "shell_mitc4_3d": "shell_mitc4_3d",
 	"dkt3": "dkt3_3d", "dkt3_3d": "dkt3_3d", "discrete_kirchhoff_triangle": "dkt3_3d",
 	"zerolength": "zerolength_3d", "zerolength_3d": "zerolength_3d",
-	"truss2d": "truss_2d", "truss_2d": "truss_2d",
+	"zerolength_trans_3d": "zerolength_trans_3d",
+	"truss2d":             "truss_2d", "truss_2d": "truss_2d",
 	"elastic_beam2d": "elastic_beam_2d", "elastic_beam_2d": "elastic_beam_2d",
 	"timoshenko_beam2d": "timoshenko_beam_2d", "timoshenko_beam_2d": "timoshenko_beam_2d",
 	"quad4": "quad4_2d", "quad4_2d": "quad4_2d",
 	"quad8": "quad8_2d", "quad8_2d": "quad8_2d",
 	"tri3": "tri3_2d", "tri3_2d": "tri3_2d",
 	"tri6": "tri6_2d", "tri6_2d": "tri6_2d",
+	"zerolength_2d":       "zerolength_2d",
+	"zerolength_frame_2d": "zerolength_frame_2d",
 }
 
 func solveProblem(input ProblemInput) ProblemOutput {
@@ -592,6 +598,52 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		copy(n2[:], ei.Nodes)
 		return zerolength.NewZeroLength(eid, n2, ei.Springs), nil
 
+	case "zerolength_trans_3d":
+		if len(ei.Nodes) != 2 {
+			return nil, fmt.Errorf("zerolength_trans_3d requires 2 nodes")
+		}
+		for _, nid := range ei.Nodes {
+			if nid < 0 || nid >= nn {
+				return nil, fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		var n2 [2]int
+		copy(n2[:], ei.Nodes)
+		var s3 [3]float64
+		copy(s3[:], ei.Springs[:3])
+		return zerolength.NewZeroLength3DOF(eid, n2, s3), nil
+
+	case "zerolength_2d":
+		if len(ei.Nodes) != 2 {
+			return nil, fmt.Errorf("zerolength_2d requires 2 nodes")
+		}
+		for _, nid := range ei.Nodes {
+			if nid < 0 || nid >= nn {
+				return nil, fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		var n2 [2]int
+		copy(n2[:], ei.Nodes)
+		var s2 [2]float64
+		s2[0] = ei.Springs[0]
+		s2[1] = ei.Springs[1]
+		return zerolength.NewZeroLength2D(eid, n2, s2), nil
+
+	case "zerolength_frame_2d":
+		if len(ei.Nodes) != 2 {
+			return nil, fmt.Errorf("zerolength_frame_2d requires 2 nodes")
+		}
+		for _, nid := range ei.Nodes {
+			if nid < 0 || nid >= nn {
+				return nil, fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		var n2 [2]int
+		copy(n2[:], ei.Nodes)
+		var s3 [3]float64
+		copy(s3[:], ei.Springs[:3])
+		return zerolength.NewZeroLength2DFrame(eid, n2, s3), nil
+
 	default:
 		return nil, fmt.Errorf("unknown element type: %s", ei.Type)
 	}
@@ -683,6 +735,21 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 		case *shell.DiscreteKirchhoffTriangle:
 			mx, my, mxy := e.LocalMoments()
 			ef.ShellForces = &ShellForcesOutput{Mx: mx, My: my, Mxy: mxy}
+		case *zerolength.ZeroLength:
+			f := e.SpringForce()
+			ef.SpringForces = &SpringForcesOutput{
+				Fx: &f[0], Fy: &f[1], Fz: &f[2],
+				Mx: &f[3], My: &f[4], Mz: &f[5],
+			}
+		case *zerolength.ZeroLength3DOF:
+			f := e.SpringForce()
+			ef.SpringForces = &SpringForcesOutput{Fx: &f[0], Fy: &f[1], Fz: &f[2]}
+		case *zerolength.ZeroLength2D:
+			f := e.SpringForce()
+			ef.SpringForces = &SpringForcesOutput{Fx: &f[0], Fy: &f[1]}
+		case *zerolength.ZeroLength2DFrame:
+			f := e.SpringForce()
+			ef.SpringForces = &SpringForcesOutput{Fx: &f[0], Fy: &f[1], Mz: &f[2]}
 		}
 		out[i] = ef
 	}
