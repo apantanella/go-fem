@@ -175,11 +175,22 @@ dom.ApplyDirichletBC()
 | `ApplyLoad(node, dof, value)` | Concentrated force or moment | All |
 | `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `ElasticBeam2D`, `TimoshenkoBeam3D`, `TimoshenkoBeam2D` |
 | `AddSurfacePressure(faceNodes[4], P)` | Uniform pressure on quad face (2×2 Gauss) | Any 4 nodes |
-| `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | `Tet4` (exact), `Hexa8` (Gauss) |
+| `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | **All elements** (see table below) |
 
 Elements implement optional load interfaces:
 - `element.EquivalentNodalLoader` — converts distributed load to nodal forces
-- `element.BodyForceLoader` — computes body-force nodal contributions
+- `element.BodyForceLoader` — computes body-force nodal contributions (now implemented by **all** element types)
+
+#### Body-force implementation per element family
+
+| Family | Elements | Method |
+|--------|----------|--------|
+| **3D solids** | `Tet4`, `Tet10`, `Hexa8`, `Brick20` | Gauss quadrature — same rule as `formKe` |
+| **Truss/bar** | `Truss2D`, `Truss3D`, `CorotTruss` | `ρ·A·L/2·g` lumped equally at both nodes |
+| **Beam/frame** | `ElasticBeam2D`, `ElasticBeam3D`, `TimoshenkoBeam2D`, `TimoshenkoBeam3D` | Delegates to `EquivalentNodalLoad(g, ρ·A)` — UDL fixed-end forces |
+| **Shell** | `ShellMITC4`, `DKT3` | 2×2 Gauss (MITC4) / area/3 lumped per node (DKT3) — translational DOFs only |
+| **2D plane** | `Quad4`, `Quad8`, `Tri3`, `Tri6` | Same Gauss rule as `formKe` — in-plane (X,Y) components only |
+| **ZeroLength** | all four variants | Returns zero vector (no physical extent) |
 
 ---
 
@@ -504,6 +515,7 @@ curl -X POST http://localhost:8080/solve \
 | `examples/timoshenko_deep_beam/` | `timoshenko_beam_3d` | Nodal | Deep cantilever (L/h=2): shear adds 16 % to EB deflection |
 | `examples/dkt3_tri_plate/` | `dkt3_3d` | Nodal | Single DKT3 triangle: clamped edge, point load + UDL equiv. variants |
 | `examples/tri_plane/` | `tri3_2d`, `tri6_2d` | Nodal | Plane-stress cantilever meshed with CST/LST triangles |
+| `examples/mixed_3d_building/` | `hexa8_3d`, `elastic_beam_3d`, `truss_3d`, `shell_mitc4_3d`, `dkt3_3d` | Nodal + `body_force` | 3D building with 5 element types: concrete foundation, steel frame, truss bracing, roof shell |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
@@ -604,6 +616,7 @@ go run ./validation
 | Truss – `AxialForce()` post-processing | `Truss3D` | 1.000e+04 | 1.000e+04 | 0.00e+00 | PASS ✓ |
 | Beam – `EndForces()` Mz at support | `ElasticBeam3D` | 1.000e+00 | 1.000e+00 | 0.00e+00 | PASS ✓ |
 | Hexa8 – `StressCentroid()` σxx | `Hexa8` | 1.000e+00 | 1.000e+00 | 1.11e-14 | PASS ✓ |
+| Mixed – large 3D model convergence | 5 element types (87 elements, 48 nodes, 288 DOFs) | 1.000e+00 | 1.000e+00 | 0.00e+00 | PASS ✓ |
 
 ### Case descriptions
 
@@ -616,6 +629,7 @@ go run ./validation
 | Truss `AxialForce()` | $N = \frac{EA}{L}\Delta u_{axial} = F$ | Same as truss deformation case |
 | Beam `EndForces()` Mz | $M_z^{(i)} = F \cdot L$ | Cantilever, $F=1,\ L=1$ |
 | Hexa8 `StressCentroid()` | $\sigma_{xx} = F/A = 1$ | Same as uniaxial patch case |
+| Mixed 3D model | Convergence check: numerical result = 1 when solver succeeds | 3D building — 9 Hexa8 (foundation) + 40 ElasticBeam3D (columns/beams) + 24 Truss3D (bracing) + 4 ShellMITC4 + 10 DKT3 (roof); 50 kN/node gravity on 16 roof nodes + Hexa8 body forces |
 
 ---
 
