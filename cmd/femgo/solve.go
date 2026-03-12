@@ -194,12 +194,22 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	// --- Pick solver ---
 	solverName := "cholesky"
 	var slv solver.LinearSolver
+	opts := input.SolverOptions
 	switch input.Solver {
 	case "", "cholesky":
 		slv = solver.Cholesky{}
 	case "lu":
 		slv = solver.LU{}
 		solverName = "lu"
+	case "skyline":
+		slv = solver.SkylineLDL{ZeroTol: opts.ZeroTol}
+		solverName = "skyline"
+	case "cg":
+		slv = solver.CG{Tol: opts.Tol, MaxIter: opts.MaxIter}
+		solverName = "cg"
+	case "gmres":
+		slv = solver.GMRES{Tol: opts.Tol, MaxIter: opts.MaxIter, Restart: opts.Restart}
+		solverName = "gmres"
 	default:
 		return errorResponse("unknown solver: %s", input.Solver)
 	}

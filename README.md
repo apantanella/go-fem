@@ -11,7 +11,9 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 - Isotropic and orthotropic linear elastic materials
 - Automatic DOF detection (2, 3, or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
-- Cholesky and LU linear solvers
+- Cholesky and LU dense direct solvers
+- Skyline LDL^T sparse direct solver (variable-bandwidth profile)
+- Conjugate Gradient (CG) and restarted GMRES iterative solvers
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
 - Optional `"dimensions"` field (`"2D"` / `"3D"`) validates element compatibility at solve time
@@ -202,16 +204,44 @@ disp := dom.SetDisplacements(U) // [][6]float64 indexed by node ID
 
 ### Solvers
 
-| Name | Type | Use when |
-|------|------|----------|
-| `Cholesky` | `solver.Cholesky{}` | Default; symmetric positive definite K (most structural problems) |
-| `LU` | `solver.LU{}` | General; use when Cholesky fails (e.g. models with ZeroLength springs) |
-
-Both implement `solver.LinearSolver`:
+All solvers implement `solver.LinearSolver`:
 ```go
 type LinearSolver interface {
     Solve(K *mat.Dense, F *mat.VecDense) (*mat.VecDense, error)
 }
+```
+
+| JSON `"solver"` | Go type | Kind | Use when |
+|----------------|---------|------|----------|
+| `"cholesky"` *(default)* | `solver.Cholesky{}` | Dense direct | SPD K — most structural problems |
+| `"lu"` | `solver.LU{}` | Dense direct | General (non-SPD); models with ZeroLength springs |
+| `"skyline"` | `solver.SkylineLDL{}` | Sparse direct | Banded SPD K — faster than dense Cholesky when bandwidth ≪ n |
+| `"cg"` | `solver.CG{}` | Iterative | Large SPD systems; O(n·bandwidth) per iteration |
+| `"gmres"` | `solver.GMRES{}` | Iterative | Non-symmetric or indefinite systems; configurable restart |
+
+#### Solver tuning via `solver_options`
+
+Iterative and sparse solvers accept optional parameters through the `"solver_options"` JSON object:
+
+| Field | Type | Applies to | Description |
+|-------|------|------------|-------------|
+| `"tol"` | float64 | `cg`, `gmres` | Relative residual tolerance `‖r‖/‖F‖` (default `1e-10`) |
+| `"max_iter"` | int | `cg`, `gmres` | Maximum iterations / outer restarts (default: `3n` for CG, `⌈3n/restart⌉` for GMRES) |
+| `"restart"` | int | `gmres` | Krylov subspace dimension per restart cycle (default `50`) |
+| `"zero_tol"` | float64 | `skyline` | Off-diagonal sparsity threshold relative to max diagonal entry (default `1e-14`) |
+
+```go
+// Dense direct (default)
+slv := solver.Cholesky{}
+
+// Sparse direct — skyline LDL^T
+slv = solver.SkylineLDL{} // or: SkylineLDL{ZeroTol: 1e-12}
+
+// Iterative — Conjugate Gradient (SPD)
+slv = solver.CG{Tol: 1e-12, MaxIter: 500}
+
+// Iterative — GMRES (general / non-symmetric)
+slv = solver.GMRES{Tol: 1e-10, Restart: 30}
 ```
 
 ---
@@ -265,7 +295,8 @@ go build -o femgo ./cmd/femgo
   "loads": [
     {"node": 1, "dof": 0, "value": 5000}
   ],
-  "solver": "cholesky"
+  "solver": "cg",
+  "solver_options": {"tol": 1e-12, "max_iter": 1000}
 }
 ```
 
@@ -273,7 +304,9 @@ go build -o femgo ./cmd/femgo
 
 **Element naming**: all element types use an explicit `_2d` or `_3d` suffix (e.g. `"truss_3d"`, `"elastic_beam_2d"`). Legacy names without a suffix (e.g. `"truss3d"`, `"elastic_beam3d"`) are accepted as backward-compatible aliases.
 
-**Solver options**: `"cholesky"` (default) or `"lu"`
+**`"solver"`**: `"cholesky"` (default) \| `"lu"` \| `"skyline"` \| `"cg"` \| `"gmres"`
+
+**`"solver_options"`** (optional): tuning for iterative / sparse solvers. See [Solver tuning](#solver-tuning-via-solver_options) above.
 
 **Prescribed displacements**: add a `"values"` array to `boundary_conditions` parallel to `"dofs"`. Omitted values default to 0.
 
@@ -623,7 +656,7 @@ type LinearSolver interface {
     Solve(K *mat.Dense, F *mat.VecDense) (*mat.VecDense, error)
 }
 ```
-Examples to add: sparse iterative solvers (CG, GMRES), sparse direct solvers.
+The package already ships five implementations: `Cholesky`, `LU`, `SkylineLDL`, `CG`, and `GMRES`. Potential extensions: AMG preconditioned CG, sparse LU (CSR format), GPU-accelerated solvers.
 
 ### Adding an Analysis Strategy
 

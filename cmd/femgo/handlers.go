@@ -56,7 +56,7 @@ func handleInfo(w http.ResponseWriter, _ *http.Request) {
 			"zerolength_2d", "zerolength_frame_2d",
 		},
 		"materials": []string{"isotropic_linear", "orthotropic_linear"},
-		"solvers":   []string{"cholesky", "lu"},
+		"solvers":   []string{"cholesky", "lu", "skyline", "cg", "gmres"},
 		"endpoints": map[string]string{
 			"POST /solve":    "Submit a FEM problem (JSON) and get displacement results",
 			"GET  /elements": "List available elements grouped by dimension",

@@ -1,7 +1,7 @@
 {
   "dimensions": "3D",
   "materials": [
-    {"id": "steel", "type": "isotropic_linear", "E": 210000, "nu": 0.3}
+    {"id": "steel", "type": "isotropic_linear", "E": 210000000, "nu": 0.3}
   ],
   "nodes": [
     [0, 0, 0],

@@ -11,7 +11,17 @@ type ProblemInput struct {
 	Elements           []ElementInput  `json:"elements"`
 	BoundaryConditions []BCInput       `json:"boundary_conditions"`
 	Loads              []LoadInput     `json:"loads"`
-	Solver             string          `json:"solver,omitempty"` // "cholesky" (default) | "lu"
+	Solver             string          `json:"solver,omitempty"`         // "cholesky" (default) | "lu" | "skyline" | "cg" | "gmres"
+	SolverOptions      SolverOptions   `json:"solver_options,omitempty"` // optional tuning for iterative/sparse solvers
+}
+
+// SolverOptions holds optional tuning parameters for iterative and sparse solvers.
+// Zero values fall back to solver-specific defaults.
+type SolverOptions struct {
+	Tol     float64 `json:"tol,omitempty"`      // relative residual tolerance (CG, GMRES)
+	MaxIter int     `json:"max_iter,omitempty"` // maximum iterations / outer restarts (CG, GMRES)
+	Restart int     `json:"restart,omitempty"`  // Krylov subspace dimension per restart (GMRES only)
+	ZeroTol float64 `json:"zero_tol,omitempty"` // sparsity threshold for pattern detection (SkylineLDL)
 }
 
 type MaterialInput struct {
