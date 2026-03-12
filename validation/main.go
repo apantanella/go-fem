@@ -339,6 +339,7 @@ func main() {
 		{"Truss     – AxialForce() post-processing", caseTrussAxialForce, 1e-8},
 		{"Beam      – EndForces() Mz at support", caseBeamEndMoment, 1e-8},
 		{"Hexa8     – StressCentroid() σxx", caseHexa8Stress, 1e-8},
+		{"Mixed     – large 3D model convergence", caseMixedLargeModel, 1e-8},
 	}
 
 	sep := strings.Repeat("─", 88)
