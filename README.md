@@ -11,9 +11,7 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 - Isotropic and orthotropic linear elastic materials
 - Automatic DOF detection (2, 3, or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
-- Cholesky and LU dense direct solvers
-- Skyline LDL^T sparse direct solver (variable-bandwidth profile)
-- Conjugate Gradient (CG) and restarted GMRES iterative solvers
+- Five linear solvers: `Cholesky` (dense SPD), `LU` (dense general), `SkylineLDL` (sparse banded), `CG` (iterative SPD), `GMRES` (iterative general/non-symmetric)
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
 - Optional `"dimensions"` field (`"2D"` / `"3D"`) validates element compatibility at solve time
