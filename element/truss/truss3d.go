@@ -88,6 +88,20 @@ func (t *Truss3D) Update(disp []float64) error {
 func (t *Truss3D) CommitState() error   { return nil }
 func (t *Truss3D) RevertToStart() error { t.ue = [6]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// For a linear 3D bar each node receives half the total weight (ρ·A·L/2·g).
+func (t *Truss3D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(6, nil)
+	q := rho * t.A * t.length / 2.0
+	f.SetVec(0, q*g[0])
+	f.SetVec(1, q*g[1])
+	f.SetVec(2, q*g[2])
+	f.SetVec(3, q*g[0])
+	f.SetVec(4, q*g[1])
+	f.SetVec(5, q*g[2])
+	return f
+}
+
 // Length returns the element length.
 func (t *Truss3D) Length() float64 { return t.length }
 

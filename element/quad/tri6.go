@@ -210,6 +210,31 @@ func (t *Tri6) Update(disp []float64) error { copy(t.ue[:], disp); return nil }
 func (t *Tri6) CommitState() error          { return nil }
 func (t *Tri6) RevertToStart() error        { t.ue = [12]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// using the same 3-point Gauss quadrature as formKe.
+// Only X and Y components of g are used.
+func (t *Tri6) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(12, nil)
+	for _, gp := range tri6GP {
+		xi, eta, w := gp[0], gp[1], gp[2]
+		N, dNdxi, dNdeta := tri6Shape(xi, eta)
+		var j00, j01, j10, j11 float64
+		for n := 0; n < 6; n++ {
+			j00 += dNdxi[n] * t.Coords[n][0]
+			j01 += dNdxi[n] * t.Coords[n][1]
+			j10 += dNdeta[n] * t.Coords[n][0]
+			j11 += dNdeta[n] * t.Coords[n][1]
+		}
+		detJ := j00*j11 - j01*j10
+		scale := rho * t.Thick * w * math.Abs(detJ)
+		for n := 0; n < 6; n++ {
+			f.SetVec(2*n, f.AtVec(2*n)+scale*N[n]*g[0])
+			f.SetVec(2*n+1, f.AtVec(2*n+1)+scale*N[n]*g[1])
+		}
+	}
+	return f
+}
+
 // StressCentroid returns the in-plane stress at the element centroid
 // (ξ = η = 1/3) as [σxx, σyy, τxy] = D·B·ue.
 func (t *Tri6) StressCentroid() [3]float64 {

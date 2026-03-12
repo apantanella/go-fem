@@ -167,13 +167,17 @@ func quad8PlaneD(E, nu float64, ptype PlaneType) *mat.Dense {
 	D := mat.NewDense(3, 3, nil)
 	if ptype == PlaneStress {
 		c := E / (1 - nu*nu)
-		D.Set(0, 0, c); D.Set(0, 1, c*nu)
-		D.Set(1, 0, c*nu); D.Set(1, 1, c)
+		D.Set(0, 0, c)
+		D.Set(0, 1, c*nu)
+		D.Set(1, 0, c*nu)
+		D.Set(1, 1, c)
 		D.Set(2, 2, c*(1-nu)/2)
 	} else {
 		c := E / ((1 + nu) * (1 - 2*nu))
-		D.Set(0, 0, c*(1-nu)); D.Set(0, 1, c*nu)
-		D.Set(1, 0, c*nu); D.Set(1, 1, c*(1-nu))
+		D.Set(0, 0, c*(1-nu))
+		D.Set(0, 1, c*nu)
+		D.Set(1, 0, c*nu)
+		D.Set(1, 1, c*(1-nu))
 		D.Set(2, 2, c*(1-2*nu)/2)
 	}
 	return D
@@ -204,6 +208,36 @@ func (q *Quad8) DOFTypes() []dof.Type {
 func (q *Quad8) Update(disp []float64) error { copy(q.ue[:], disp); return nil }
 func (q *Quad8) CommitState() error          { return nil }
 func (q *Quad8) RevertToStart() error        { q.ue = [16]float64{}; return nil }
+
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// using the same 3×3 Gauss quadrature as formKe.
+// Only X and Y components of g are used.
+func (q *Quad8) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(16, nil)
+	gp := math.Sqrt(3.0 / 5.0)
+	pts := [3]float64{-gp, 0, gp}
+	wts := [3]float64{5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0}
+	for ai, xi := range pts {
+		for bi, eta := range pts {
+			w := wts[ai] * wts[bi]
+			N, dNdxi, dNdeta := quad8Shape(xi, eta)
+			var j00, j01, j10, j11 float64
+			for n := 0; n < 8; n++ {
+				j00 += dNdxi[n] * q.Coords[n][0]
+				j01 += dNdxi[n] * q.Coords[n][1]
+				j10 += dNdeta[n] * q.Coords[n][0]
+				j11 += dNdeta[n] * q.Coords[n][1]
+			}
+			detJ := j00*j11 - j01*j10
+			scale := rho * q.Thick * w * math.Abs(detJ)
+			for n := 0; n < 8; n++ {
+				f.SetVec(2*n, f.AtVec(2*n)+scale*N[n]*g[0])
+				f.SetVec(2*n+1, f.AtVec(2*n+1)+scale*N[n]*g[1])
+			}
+		}
+	}
+	return f
+}
 
 // StressCentroid returns the in-plane stress at the element centroid (ξ=η=0).
 func (q *Quad8) StressCentroid() [3]float64 {

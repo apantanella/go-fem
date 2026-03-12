@@ -356,6 +356,63 @@ func (s *ShellMITC4) Update(disp []float64) error { copy(s.ue[:], disp); return 
 func (s *ShellMITC4) CommitState() error   { return nil }
 func (s *ShellMITC4) RevertToStart() error { s.ue = [24]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// Uses 2×2 Gauss integration over the element area. Body force is applied to
+// the translational DOFs (UX, UY, UZ) only; rotational DOFs receive zero.
+func (s *ShellMITC4) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(24, nil)
+
+	e1, e2, _ := s.localAxes()
+
+	var cx, cy, cz float64
+	for i := 0; i < 4; i++ {
+		cx += s.Coords[i][0]
+		cy += s.Coords[i][1]
+		cz += s.Coords[i][2]
+	}
+	cx /= 4
+	cy /= 4
+	cz /= 4
+
+	var xl [4][2]float64
+	for i := 0; i < 4; i++ {
+		dx := s.Coords[i][0] - cx
+		dy := s.Coords[i][1] - cy
+		dz := s.Coords[i][2] - cz
+		xl[i][0] = e1[0]*dx + e1[1]*dy + e1[2]*dz
+		xl[i][1] = e2[0]*dx + e2[1]*dy + e2[2]*dz
+	}
+
+	gp := 1.0 / math.Sqrt(3.0)
+	ref := [4][2]float64{{-1, -1}, {1, -1}, {1, 1}, {-1, 1}}
+	pts := [2]float64{-gp, gp}
+
+	for _, xi := range pts {
+		for _, eta := range pts {
+			var N [4]float64
+			var j00, j01, j10, j11 float64
+			for i := 0; i < 4; i++ {
+				si, ei := ref[i][0], ref[i][1]
+				N[i] = (1 + si*xi) * (1 + ei*eta) / 4
+				dxi := si * (1 + ei*eta) / 4
+				deta := (1 + si*xi) * ei / 4
+				j00 += dxi * xl[i][0]
+				j01 += dxi * xl[i][1]
+				j10 += deta * xl[i][0]
+				j11 += deta * xl[i][1]
+			}
+			detJ := j00*j11 - j01*j10
+			scale := rho * s.Thick * math.Abs(detJ)
+			for n := 0; n < 4; n++ {
+				f.SetVec(6*n, f.AtVec(6*n)+scale*N[n]*g[0])
+				f.SetVec(6*n+1, f.AtVec(6*n+1)+scale*N[n]*g[1])
+				f.SetVec(6*n+2, f.AtVec(6*n+2)+scale*N[n]*g[2])
+			}
+		}
+	}
+	return f
+}
+
 // ShellForces holds the section force and moment resultants at the element centroid
 // in the local (shell) coordinate system.
 type ShellForces struct {

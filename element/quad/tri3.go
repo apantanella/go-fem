@@ -129,6 +129,21 @@ func (t *Tri3) Update(disp []float64) error { copy(t.ue[:], disp); return nil }
 func (t *Tri3) CommitState() error          { return nil }
 func (t *Tri3) RevertToStart() error        { t.ue = [6]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// For a CST triangle each node receives area/3 of the total surface weight
+// (ρ·thick·area/3·g). Only X and Y components of g are used.
+func (t *Tri3) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(6, nil)
+	q := rho * t.Thick * math.Abs(triArea2(t.Coords)) / 6.0
+	f.SetVec(0, q*g[0])
+	f.SetVec(1, q*g[1])
+	f.SetVec(2, q*g[0])
+	f.SetVec(3, q*g[1])
+	f.SetVec(4, q*g[0])
+	f.SetVec(5, q*g[1])
+	return f
+}
+
 // StressCentroid returns the in-plane stress (constant over the element)
 // as [σxx, σyy, τxy] = D·B·ue.
 func (t *Tri3) StressCentroid() [3]float64 {

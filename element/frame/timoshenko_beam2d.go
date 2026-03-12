@@ -158,6 +158,12 @@ func (b *TimoshenkoBeam2D) Update(disp []float64) error {
 func (b *TimoshenkoBeam2D) CommitState() error   { return nil }
 func (b *TimoshenkoBeam2D) RevertToStart() error { b.ue = [6]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// (ρ·A per unit length). Delegates to EquivalentNodalLoad.
+func (b *TimoshenkoBeam2D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	return b.EquivalentNodalLoad(g, rho*b.Sec.A)
+}
+
 // Length returns the beam length.
 func (b *TimoshenkoBeam2D) Length() float64 { return b.length }
 

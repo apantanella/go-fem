@@ -205,6 +205,64 @@ func (b *Brick20) Update(disp []float64) error { copy(b.ue[:], disp); return nil
 func (b *Brick20) CommitState() error   { return nil }
 func (b *Brick20) RevertToStart() error { b.ue = [60]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// using the same 3×3×3 Gauss quadrature as formKe: f_i = ρ·∫N_i·g·dV.
+func (b *Brick20) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(60, nil)
+
+	gr := math.Sqrt(3.0 / 5.0)
+	gpts := [3]float64{-gr, 0, gr}
+	gwts := [3]float64{5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0}
+
+	X := mat.NewDense(20, 3, nil)
+	for i := 0; i < 20; i++ {
+		for j := 0; j < 3; j++ {
+			X.Set(i, j, b.Coords[i][j])
+		}
+	}
+
+	dNnat := mat.NewDense(3, 20, nil)
+	J := mat.NewDense(3, 3, nil)
+
+	for ix := 0; ix < 3; ix++ {
+		for iy := 0; iy < 3; iy++ {
+			for iz := 0; iz < 3; iz++ {
+				xi := gpts[ix]
+				eta := gpts[iy]
+				zeta := gpts[iz]
+				w := gwts[ix] * gwts[iy] * gwts[iz]
+
+				var N [20]float64
+				for i := 0; i < 20; i++ {
+					si := brick20Ref[i][0]
+					ei := brick20Ref[i][1]
+					zi := brick20Ref[i][2]
+					if math.Abs(si) > 0.5 && math.Abs(ei) > 0.5 && math.Abs(zi) > 0.5 {
+						N[i] = 0.125 * (1 + si*xi) * (1 + ei*eta) * (1 + zi*zeta) * (si*xi + ei*eta + zi*zeta - 2)
+					} else if math.Abs(si) < 0.5 {
+						N[i] = 0.25 * (1 - xi*xi) * (1 + ei*eta) * (1 + zi*zeta)
+					} else if math.Abs(ei) < 0.5 {
+						N[i] = 0.25 * (1 + si*xi) * (1 - eta*eta) * (1 + zi*zeta)
+					} else {
+						N[i] = 0.25 * (1 + si*xi) * (1 + ei*eta) * (1 - zeta*zeta)
+					}
+				}
+
+				b.shapeDeriv(xi, eta, zeta, dNnat)
+				J.Mul(dNnat, X)
+				detJ := math.Abs(mat.Det(J))
+				scale := rho * w * detJ
+				for n := 0; n < 20; n++ {
+					f.SetVec(3*n, f.AtVec(3*n)+scale*N[n]*g[0])
+					f.SetVec(3*n+1, f.AtVec(3*n+1)+scale*N[n]*g[1])
+					f.SetVec(3*n+2, f.AtVec(3*n+2)+scale*N[n]*g[2])
+				}
+			}
+		}
+	}
+	return f
+}
+
 // StressCentroid returns the Cauchy stress at the element centroid (ξ=η=ζ=0)
 // in Voigt notation [sxx, syy, szz, txy, tyz, txz].
 func (b *Brick20) StressCentroid() [6]float64 {

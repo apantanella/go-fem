@@ -66,6 +66,12 @@ func (z *ZeroLength) Update(disp []float64) error { copy(z.ue[:], disp); return 
 func (z *ZeroLength) CommitState() error   { return nil }
 func (z *ZeroLength) RevertToStart() error { z.ue = [12]float64{}; return nil }
 
+// BodyForceLoad returns a zero vector: a zero-length element has no physical
+// extent and therefore carries no body-force contribution.
+func (z *ZeroLength) BodyForceLoad(_ [3]float64, _ float64) *mat.VecDense {
+	return mat.NewVecDense(12, nil)
+}
+
 // SpringForce returns [Fx, Fy, Fz, Mx, My, Mz] — spring force/moment (tension/CCW positive).
 func (z *ZeroLength) SpringForce() [6]float64 {
 	var f [6]float64
@@ -123,6 +129,12 @@ func (z *ZeroLength3DOF) Update(disp []float64) error { copy(z.ue[:], disp); ret
 func (z *ZeroLength3DOF) CommitState() error   { return nil }
 func (z *ZeroLength3DOF) RevertToStart() error { z.ue = [6]float64{}; return nil }
 
+// BodyForceLoad returns a zero vector: a zero-length element has no physical
+// extent and therefore carries no body-force contribution.
+func (z *ZeroLength3DOF) BodyForceLoad(_ [3]float64, _ float64) *mat.VecDense {
+	return mat.NewVecDense(6, nil)
+}
+
 // SpringForce returns [Fx, Fy, Fz] — spring force (tension positive).
 func (z *ZeroLength3DOF) SpringForce() [3]float64 {
 	var f [3]float64
@@ -179,6 +191,12 @@ func (z *ZeroLength2D) Update(disp []float64) error { copy(z.ue[:], disp); retur
 func (z *ZeroLength2D) CommitState() error          { return nil }
 func (z *ZeroLength2D) RevertToStart() error        { z.ue = [4]float64{}; return nil }
 
+// BodyForceLoad returns a zero vector: a zero-length element has no physical
+// extent and therefore carries no body-force contribution.
+func (z *ZeroLength2D) BodyForceLoad(_ [3]float64, _ float64) *mat.VecDense {
+	return mat.NewVecDense(4, nil)
+}
+
 // SpringForce returns [Fx, Fy] — spring force (tension positive).
 func (z *ZeroLength2D) SpringForce() [2]float64 {
 	return [2]float64{
@@ -233,6 +251,12 @@ func (z *ZeroLength2DFrame) DOFTypes() []dof.Type { return dof.PlaneFrame(2) }
 func (z *ZeroLength2DFrame) Update(disp []float64) error { copy(z.ue[:], disp); return nil }
 func (z *ZeroLength2DFrame) CommitState() error          { return nil }
 func (z *ZeroLength2DFrame) RevertToStart() error        { z.ue = [6]float64{}; return nil }
+
+// BodyForceLoad returns a zero vector: a zero-length element has no physical
+// extent and therefore carries no body-force contribution.
+func (z *ZeroLength2DFrame) BodyForceLoad(_ [3]float64, _ float64) *mat.VecDense {
+	return mat.NewVecDense(6, nil)
+}
 
 // SpringForce returns [Fx, Fy, Mz] — spring force/moment (tension/CCW positive).
 func (z *ZeroLength2DFrame) SpringForce() [3]float64 {

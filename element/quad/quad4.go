@@ -166,6 +166,38 @@ func (q *Quad4) Update(disp []float64) error { copy(q.ue[:], disp); return nil }
 func (q *Quad4) CommitState() error   { return nil }
 func (q *Quad4) RevertToStart() error { q.ue = [8]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// using the same 2×2 Gauss quadrature as formKe.
+// Only X and Y components of g are used.
+func (q *Quad4) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(8, nil)
+	gp := 1.0 / math.Sqrt(3.0)
+	pts := [2]float64{-gp, gp}
+	for _, xi := range pts {
+		for _, eta := range pts {
+			var N [4]float64
+			var j00, j01, j10, j11 float64
+			for i := 0; i < 4; i++ {
+				si, ei := quad4Ref[i][0], quad4Ref[i][1]
+				N[i] = (1 + si*xi) * (1 + ei*eta) / 4
+				dxi := si * (1 + ei*eta) / 4
+				deta := (1 + si*xi) * ei / 4
+				j00 += dxi * q.Coords[i][0]
+				j01 += dxi * q.Coords[i][1]
+				j10 += deta * q.Coords[i][0]
+				j11 += deta * q.Coords[i][1]
+			}
+			detJ := j00*j11 - j01*j10
+			scale := rho * q.Thick * math.Abs(detJ)
+			for n := 0; n < 4; n++ {
+				f.SetVec(2*n, f.AtVec(2*n)+scale*N[n]*g[0])
+				f.SetVec(2*n+1, f.AtVec(2*n+1)+scale*N[n]*g[1])
+			}
+		}
+	}
+	return f
+}
+
 // StressCentroid returns the in-plane stress at the element centroid (ξ=η=0)
 // as [sxx, syy, txy] = D·B·ue.
 func (q *Quad4) StressCentroid() [3]float64 {

@@ -226,6 +226,12 @@ func (b *TimoshenkoBeam3D) Update(disp []float64) error {
 func (b *TimoshenkoBeam3D) CommitState() error   { return nil }
 func (b *TimoshenkoBeam3D) RevertToStart() error { b.ue = [12]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// (ρ·A per unit length). Delegates to EquivalentNodalLoad.
+func (b *TimoshenkoBeam3D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	return b.EquivalentNodalLoad(g, rho*b.Sec.A)
+}
+
 // EquivalentNodalLoad returns work-equivalent nodal forces for a uniformly
 // distributed load.  Fixed-end reactions for Timoshenko beam:
 //

@@ -212,6 +212,37 @@ func (d *DiscreteKirchhoffTriangle) Update(disp []float64) error { copy(d.ue[:],
 func (d *DiscreteKirchhoffTriangle) CommitState() error   { return nil }
 func (d *DiscreteKirchhoffTriangle) RevertToStart() error { d.ue = [18]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// For a CST triangle, each node receives area/3 of the total surface weight
+// (ρ·thick·area/3·g). Applied to translational DOFs only; rotational DOFs are zero.
+func (d *DiscreteKirchhoffTriangle) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(18, nil)
+	e1, e2, _, err := d.localAxes()
+	if err != nil {
+		return f
+	}
+
+	origin := d.Coords[0]
+	var xl [3][2]float64
+	for i := 0; i < 3; i++ {
+		dx := d.Coords[i][0] - origin[0]
+		dy := d.Coords[i][1] - origin[1]
+		dz := d.Coords[i][2] - origin[2]
+		xl[i][0] = e1[0]*dx + e1[1]*dy + e1[2]*dz
+		xl[i][1] = e2[0]*dx + e2[1]*dy + e2[2]*dz
+	}
+
+	twoA := (xl[1][0]-xl[0][0])*(xl[2][1]-xl[0][1]) - (xl[2][0]-xl[0][0])*(xl[1][1]-xl[0][1])
+	q := rho * d.Thick * math.Abs(twoA) / 6.0
+
+	for n := 0; n < 3; n++ {
+		f.SetVec(6*n, q*g[0])
+		f.SetVec(6*n+1, q*g[1])
+		f.SetVec(6*n+2, q*g[2])
+	}
+	return f
+}
+
 // LocalMoments returns centroidal bending moments in the local plate frame.
 func (d *DiscreteKirchhoffTriangle) LocalMoments() (mx, my, mxy float64) {
 	e1, e2, e3, err := d.localAxes()

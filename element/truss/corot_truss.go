@@ -132,6 +132,20 @@ func (t *CorotTruss) RevertToStart() error {
 	return nil
 }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force.
+// Uses the reference (undeformed) length L0.
+func (t *CorotTruss) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	f := mat.NewVecDense(6, nil)
+	q := rho * t.A * t.L0 / 2.0
+	f.SetVec(0, q*g[0])
+	f.SetVec(1, q*g[1])
+	f.SetVec(2, q*g[2])
+	f.SetVec(3, q*g[0])
+	f.SetVec(4, q*g[1])
+	f.SetVec(5, q*g[2])
+	return f
+}
+
 // AxialForce returns the current axial force N = A·σ (positive = tension).
 func (t *CorotTruss) AxialForce() float64 { return t.A * t.stress }
 

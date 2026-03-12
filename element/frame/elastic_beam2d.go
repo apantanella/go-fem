@@ -157,6 +157,12 @@ func (b *ElasticBeam2D) Update(disp []float64) error {
 func (b *ElasticBeam2D) CommitState() error   { return nil }
 func (b *ElasticBeam2D) RevertToStart() error { b.ue = [6]float64{}; return nil }
 
+// BodyForceLoad computes work-equivalent nodal forces due to a body force
+// (ρ·A per unit length). Delegates to EquivalentNodalLoad.
+func (b *ElasticBeam2D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
+	return b.EquivalentNodalLoad(g, rho*b.Sec.A)
+}
+
 // Length returns the beam length.
 func (b *ElasticBeam2D) Length() float64 { return b.length }
 
