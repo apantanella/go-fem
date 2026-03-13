@@ -723,6 +723,38 @@ Expected tip deflection: **−0.01821 mm** (EB bending 0.01524 + shear 0.00297).
 go run ./validation
 ```
 
+### Unit Tests
+
+Package-level Go tests cover the solver layer independently of the full FEM pipeline:
+
+```bash
+go test ./solver/...
+```
+
+#### `solver/linear_solver_test.go`
+
+| Test | What is verified |
+|------|-----------------|
+| `TestSolversAgainstReference` | All five linear solvers (`LU`, `SkylineLDL`, `CG`, `GMRES`) produce a solution that agrees with the dense Cholesky reference and satisfies `‖K·u − F‖/‖F‖ < 1e-8` on a 20-DOF tridiagonal SPD system |
+| `TestCGNotSPD` | CG returns an error for an indefinite matrix (negative diagonal entry) rather than silently diverging |
+| `TestGMRESNonSymmetric` | GMRES solves a non-symmetric 4×4 system to residual `< 1e-8` |
+
+#### `solver/eigen_test.go`
+
+| Test | What is verified |
+|------|-----------------|
+| `TestSolveGeneralizedEigen_EigenvaluesIdentityMass` | Returned ω² match the analytically known values `{1, 3}` for K=tridiagonal-2×2, M=I (tolerance 1e-10); ascending-sort invariant is also checked |
+| `TestSolveGeneralizedEigen_EigenResidual` | Dynamic equilibrium residual `‖K·φₖ − ω²ₖ·M·φₖ‖₂ < 1e-10` for every mode |
+| `TestSolveGeneralizedEigen_MOrthonormality` | M-normalization (φᵢᵀ·M·φᵢ = 1) and M-orthogonality (φᵢᵀ·M·φⱼ = 0, i≠j) within 1e-10 |
+| `TestSolveGeneralizedEigen_NonIdentityMass` | Non-identity diagonal M: analytical ω² = {1, 9/4} recovered from 4ω⁴−13ω²+9=0; residual and M-orthonormality also verified |
+| `TestSolveGeneralizedEigen_NumModesSubset` | Requesting numModes < n returns exactly the right number of eigenvalues and mode columns, with the single mode satisfying the dynamic residual |
+| `TestSolveGeneralizedEigen_MassNotPD` | A zero (singular) mass matrix triggers a descriptive error rather than a panic or silent NaN |
+| `TestExtractSubmatrix_Basic` | Correct entry selection from a 4×4 matrix for free DOF indices {1, 3} (mirrors the reduction step before the eigenvalue solve) |
+| `TestExtractSubmatrix_AllDOFs` | Selecting all DOF indices is a no-op — extracted matrix equals the original entry-by-entry |
+| `TestExpandModes_Basic` | Reduced mode columns are placed at the correct global DOF rows; constrained DOF rows remain zero (mirrors the expansion step after the eigenvalue solve) |
+| `TestFrequencyHz` | Conversion f = √ω²/(2π): exact values at ω²=4π² (1 Hz) and ω²=π² (0.5 Hz); zero-frequency guard (ω²=0→0 Hz); negative-ω² guard (→0 Hz, prevents NaN) |
+| `TestPeriodSeconds` | Conversion T = 1/f: T=1 s at ω²=4π², T=2 s at ω²=π², T=+∞ for rigid-body zero eigenvalue |
+
 ### Results (March 12, 2026)
 
 | Case | Element | Numerical | Theoretical | Rel. Err (%) | Status |
