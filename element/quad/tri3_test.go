@@ -9,6 +9,20 @@ import (
 
 // ---------- Tri3 tests ----------
 
+// TestTri3_Symmetry verifies that the 6×6 element stiffness matrix of the
+// constant-strain triangle (CST / Tri3) is symmetric.
+//
+// Property: Ke = Keᵀ. For the CST element Ke = t·A·Bᵀ·D·B (constant over
+// the element), symmetry follows directly from D being symmetric.
+//
+// Parameters: scalene triangle with nodes at (0,0), (2,0), (0,1); E=200000,
+// ν=0.3, thickness=1.0, plane stress.
+//
+// Expected: relative asymmetry |Ke[i,j]-Ke[j,i]| / avg < 1e-6 for entries
+// with avg > 1e-10.
+//
+// Why valuable: catches any non-symmetric assembly in the outer-product BᵀDB
+// or an incorrect sign in the area computation.
 func TestTri3_Symmetry(t *testing.T) {
 	nodes := [3]int{0, 1, 2}
 	coords := [3][2]float64{{0, 0}, {2, 0}, {0, 1}}
@@ -27,6 +41,21 @@ func TestTri3_Symmetry(t *testing.T) {
 	}
 }
 
+// TestTri3_RigidBody verifies that a uniform rigid-body translation produces
+// zero nodal forces for the Tri3 (CST) element.
+//
+// Property: Ke · u_rigid = 0 for u_rigid applying unit displacement in the X
+// or Y direction to all 3 nodes. For the constant-strain triangle this is
+// checked by a direct manual matrix-vector product (not using gonum's MulVec),
+// because the CST has constant B and the result must be exactly zero.
+//
+// Parameters: triangle with nodes at (0,0), (1,0), (0.5,0.8) (general scalene
+// shape to exercise all terms).
+//
+// Expected: |f[i]| < 1e-6 for all 6 force components.
+//
+// Why valuable: confirms that the shape-function gradients in B sum to zero
+// (partition of unity), so that no spurious forces are produced by rigid motion.
 func TestTri3_RigidBody(t *testing.T) {
 	nodes := [3]int{0, 1, 2}
 	coords := [3][2]float64{{0, 0}, {1, 0}, {0.5, 0.8}}
@@ -55,6 +84,19 @@ func TestTri3_RigidBody(t *testing.T) {
 	}
 }
 
+// TestTri3_PositiveDiag verifies that all 6 diagonal entries of the Tri3
+// stiffness matrix are strictly positive.
+//
+// Property: each nodal DOF (UX and UY for each of the 3 nodes) must have a
+// positive self-stiffness contribution (necessary condition for positive
+// semi-definiteness).
+//
+// Parameters: triangle at (0,0)-(1,0)-(0.5,0.8), E=200000, ν=0.3, plane stress.
+//
+// Why valuable: a zero diagonal for a DOF would indicate an unrestrained
+// degree of freedom in the element, which would cause singularity in the
+// assembled stiffness unless boundary conditions are applied — but the
+// element itself should resist deformation in all directions.
 func TestTri3_PositiveDiag(t *testing.T) {
 	nodes := [3]int{0, 1, 2}
 	coords := [3][2]float64{{0, 0}, {1, 0}, {0.5, 0.8}}
@@ -67,6 +109,17 @@ func TestTri3_PositiveDiag(t *testing.T) {
 	}
 }
 
+// TestTri3_PlaneStrainStiffer verifies that the plane strain Tri3 element is
+// stiffer than the plane stress element for the same geometry and material.
+//
+// Physical property: in plane strain the out-of-plane strain εzz is constrained
+// to zero, generating an out-of-plane stress σzz that increases the effective
+// in-plane stiffness. Specifically K_strain[0,0] > K_stress[0,0].
+//
+// Parameters: right triangle at (0,0)-(1,0)-(0,1), E=200000, ν=0.3.
+//
+// Why valuable: using the wrong constitutive matrix (e.g., swapping the two
+// cases) would cause this comparison to fail.
 func TestTri3_PlaneStrainStiffer(t *testing.T) {
 	nodes := [3]int{0, 1, 2}
 	coords := [3][2]float64{{0, 0}, {1, 0}, {0, 1}}
@@ -78,6 +131,26 @@ func TestTri3_PlaneStrainStiffer(t *testing.T) {
 	}
 }
 
+// TestTri3_PatchTest verifies that the CST element reproduces a uniform
+// uniaxial stress state exactly (the classical patch test for CST elements).
+//
+// Physical state: uniaxial strain εxx = 1e-3 with free Poisson contraction.
+// The prescribed displacement field is:
+//
+//	ux = εxx · x
+//	uy = -ν · εxx · y
+//
+// Under this constant strain field the stresses must be:
+//
+//	σxx = E · εxx = 210000 · 1e-3 = 210
+//	σyy = 0  (free Poisson contraction annuls lateral coupling)
+//	τxy = 0  (no shear strain)
+//
+// Parameters: right triangle at (0,0)-(1,0)-(0,1), E=210000, ν=0.3, plane stress.
+//
+// Why valuable: the patch test is the completeness criterion for CST.
+// Failure would imply the element cannot capture a constant stress state,
+// violating the convergence requirement of the finite element method.
 func TestTri3_PatchTest(t *testing.T) {
 	// Uniform uniaxial strain εxx = 1e-3 with free Poisson contraction.
 	E, nu := 210000.0, 0.3
@@ -106,6 +179,24 @@ func TestTri3_PatchTest(t *testing.T) {
 	}
 }
 
+// TestTri3_PureShear verifies that the Tri3 (CST) element correctly reproduces
+// a pure shear stress state under a prescribed shear displacement field.
+//
+// Physical state: pure shear with engineering shear strain γxy = 1e-3.
+// The displacement field is:
+//
+//	ux = γxy · y,  uy = 0
+//
+// which gives a constant shear strain in the CST element. The stresses must be:
+//
+//	σxx = 0, σyy = 0, τxy = G · γxy
+//	where G = E / (2(1+ν))
+//
+// Parameters: right triangle at (0,0)-(1,0)-(0,1), E=210000, ν=0.3, plane stress.
+//
+// Why valuable: confirms the shear term in the B-matrix is correctly assembled
+// and that the isotropic constitutive law does not generate spurious normal
+// stresses from pure shear.
 func TestTri3_PureShear(t *testing.T) {
 	E, nu := 210000.0, 0.3
 	G := E / (2 * (1 + nu))

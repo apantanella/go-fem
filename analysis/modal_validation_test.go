@@ -33,6 +33,20 @@ import (
 
 // TestMassMatrixSymmetry checks that GetMassMatrix returns a symmetric matrix
 // for every element type that implements MassMatrixAssembler.
+//
+// Property: Me = Meᵀ. The consistent mass matrix Me = ρ·∫ Nᵀ·N dV is symmetric
+// by construction (it is an outer product of the shape-function matrix N with
+// itself). The test covers six element types:
+//   - Truss3D (6×6), Truss2D (4×4)
+//   - ElasticBeam2D (6×6), ElasticBeam3D (12×12)
+//   - Hexa8 (24×24), Tet4 (12×12)
+//
+// Each element is tested with a unit-length or unit-cube geometry so that
+// the expected mass is known analytically.
+//
+// Why valuable: an unsymmetric mass matrix would cause the eigenvalue solver
+// to produce complex or non-physical eigenvalues and would corrupt participation
+// factor calculations that rely on M-orthonormality.
 func TestMassMatrixSymmetry(t *testing.T) {
 	rho := 7850.0
 
@@ -101,6 +115,9 @@ func TestMassMatrixSymmetry(t *testing.T) {
 }
 
 // checkSymmetry asserts me[i,j] == me[j,i] up to numerical noise.
+//
+// The tolerance is adaptive: |me[i,j] - me[j,i]| < 1e-10·(|a|+|b|+1e-30)
+// to handle both large and near-zero entries correctly.
 func checkSymmetry(t *testing.T, name string, me interface{ At(int, int) float64 }, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -113,7 +130,10 @@ func checkSymmetry(t *testing.T, name string, me interface{ At(int, int) float64
 	}
 }
 
-// checkPositiveDiag asserts all diagonal entries are positive.
+// checkPositiveDiag asserts all diagonal entries of the mass matrix are positive.
+//
+// Property: a consistent mass matrix Me = ρ·∫ Nᵀ·N dV is positive semi-definite,
+// and for well-formed elements each diagonal entry Me[i,i] = ρ·∫ Nᵢ² dV > 0.
 func checkPositiveDiag(t *testing.T, name string, me interface{ At(int, int) float64 }, n int) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -123,8 +143,24 @@ func checkPositiveDiag(t *testing.T, name string, me interface{ At(int, int) flo
 	}
 }
 
-// TestMassMatrixTraceTruss3D verifies the analytical trace of the Truss3D mass matrix.
-// For Me = ρAL/6·[2I₃, I₃; I₃, 2I₃], trace = 6·(ρAL/3) = 2·ρAL.
+// TestMassMatrixTraceTruss3D verifies the analytical trace of the Truss3D
+// consistent mass matrix.
+//
+// Analytical formula: for a bar element with length L, cross-section A and
+// density ρ, the consistent mass matrix is:
+//
+//	Me = (ρAL/6) · [2I₃, I₃; I₃, 2I₃]
+//
+// where I₃ is the 3×3 identity matrix. The trace (sum of diagonal entries) is:
+//
+//	trace(Me) = (ρAL/6) · (2·3 + 2·3) = (ρAL/6)·12 = 2·ρAL
+//
+// Parameters: ρ=7850, A=1e-4, L=2.0.
+//
+// Expected: trace = 2·ρAL = 2·7850·1e-4·2 = 3.14.
+//
+// Why valuable: confirms that the total element mass is ρAL and that it is
+// correctly split (2/3 to near-end, 1/3 to far-end, combining to 2·ρAL total).
 func TestMassMatrixTraceTruss3D(t *testing.T) {
 	rho, A, L := 7850.0, 1e-4, 2.0
 	e := truss.NewTruss3D(0, [2]int{0, 1},
@@ -141,8 +177,24 @@ func TestMassMatrixTraceTruss3D(t *testing.T) {
 	}
 }
 
-// TestMassMatrixTraceTet4 verifies the analytical trace of the Tet4 mass matrix.
-// Me[3n+k, 3n+k] = ρV/10, so trace = 12·ρV/10 = 6ρV/5.
+// TestMassMatrixTraceTet4 verifies the analytical trace of the Tet4 consistent
+// mass matrix.
+//
+// Analytical formula: for the linear tetrahedron with volume V, the consistent
+// mass matrix has the structure:
+//
+//	Me[3n+k, 3m+k] = ρV/20 · (1 + δₙₘ)   for n,m ∈ {0,1,2,3}, k ∈ {0,1,2}
+//
+// The diagonal entries are Me[i,i] = ρV/10, giving a trace of:
+//
+//	trace = 12 · ρV/10 = 6ρV/5
+//
+// Parameters: unit right-angle tet (V=1/6), ρ=7850.
+//
+// Expected: trace = 6·7850·(1/6)/5 = 1570.
+//
+// Why valuable: confirms the Tet4 mass integration correctly captures all 12
+// DOFs (4 nodes × 3 directions) with the right shape-function integrals.
 func TestMassMatrixTraceTet4(t *testing.T) {
 	rho := 7850.0
 	mat3d := material.NewIsotropicLinear(200e9, 0.3)
@@ -169,6 +221,22 @@ func TestMassMatrixTraceTet4(t *testing.T) {
 // It is the most direct validation of the eigenvalue solve.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalRayleighQuotient verifies that the Rayleigh quotient of each mode
+// shape equals the corresponding eigenvalue ω²ₖ.
+//
+// Property: for M-normalised mode shapes (φₖᵀ·M·φₖ = 1) the Rayleigh quotient is:
+//
+//	RQ(φₖ) = φₖᵀ · K_red · φₖ = ω²ₖ
+//
+// This is the most direct check on the eigenvalue solver: any error in the
+// eigenvector or eigenvalue would produce a mismatch.
+//
+// Setup: 3-element 2D cantilever with 6 free modes extracted.
+//
+// Tolerance: 1e-8 relative error on ω² for each mode.
+//
+// Why valuable: if the eigenvectors are not M-normalised or the solver returns
+// incorrect eigenvalues, the Rayleigh quotient would differ from ω²ₖ.
 func TestModalRayleighQuotient(t *testing.T) {
 	a, res := buildCantilever2D(t, 3, 6) // 3 elements, extract 6 modes (all free DOFs)
 
@@ -189,6 +257,24 @@ func TestModalRayleighQuotient(t *testing.T) {
 // 3.  M-orthonormality:  φᵢᵀ · M_red · φⱼ = δᵢⱼ
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalMOrthonormality verifies that the extracted mode shapes are
+// orthonormal with respect to the mass matrix.
+//
+// Property: for the generalised eigenvalue problem K·φ = ω²·M·φ, the mass
+// matrix provides an inner product. The solution modes are M-orthonormal:
+//
+//	φᵢᵀ · M · φⱼ = δᵢⱼ   (Kronecker delta)
+//
+// This means diagonal terms (i=j) must be exactly 1.0 (normalisation), and
+// off-diagonal terms (i≠j) must be zero (orthogonality).
+//
+// Setup: 3-element 2D cantilever with all 6 free modes extracted.
+//
+// Tolerance: |φᵢᵀ·M·φⱼ - δᵢⱼ| < 1e-8.
+//
+// Why valuable: a failure indicates the eigenvectors are not properly normalised
+// or that numerical round-off has corrupted orthogonality, which would invalidate
+// modal superposition.
 func TestModalMOrthonormality(t *testing.T) {
 	a, res := buildCantilever2D(t, 3, 6)
 
@@ -215,6 +301,23 @@ func TestModalMOrthonormality(t *testing.T) {
 // 4.  K-orthogonality:  φᵢᵀ · K_red · φⱼ = ω²ᵢ · δᵢⱼ
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalKOrthogonality verifies that the extracted mode shapes are
+// orthogonal with respect to the stiffness matrix.
+//
+// Property: for M-normalised modes of the generalised eigenvalue problem:
+//
+//	φᵢᵀ · K · φⱼ = ω²ᵢ · δᵢⱼ
+//
+// Diagonal terms give the eigenvalue (Rayleigh quotient), and off-diagonal
+// terms must be zero. This is the modal stiffness matrix being diagonal.
+//
+// Setup: 3-element 2D cantilever with all 6 free modes.
+//
+// Tolerance: |φᵢᵀ·K·φⱼ - ω²ᵢ·δᵢⱼ| / (ω²ᵢ + 1) < 1e-8.
+//
+// Why valuable: K-non-orthogonality would indicate that the eigenvectors
+// are not truly decoupling the equations of motion, which would require
+// off-diagonal terms in the modal equations.
 func TestModalKOrthogonality(t *testing.T) {
 	a, res := buildCantilever2D(t, 3, 6)
 
@@ -245,6 +348,24 @@ func TestModalKOrthogonality(t *testing.T) {
 // direction must equal 1 (100 %) — this is the completeness condition.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalEffectiveMassSum verifies that the cumulative effective mass in
+// each direction reaches 100% when all free modes are extracted.
+//
+// Property (completeness): for a structure with n_free free DOFs, when all
+// n_free modes are extracted, the sum of effective masses in each direction d
+// must equal the total structural mass:
+//
+//	Σₖ meff_{k,d} = M_total_d = 1  (as a fraction of total mass)
+//
+// This follows from the completeness of the eigenvector basis.
+//
+// Setup: 2-element 2D cantilever (2·3 = 6 free DOFs), extract all 6 modes.
+//
+// Tolerance: |cumulative_meff - 1.0| < 1e-6 for X and Y directions.
+//
+// Why valuable: if the participation factors or effective mass computation
+// has a scaling error, the sum would differ from 1, which would cause modal
+// response spectra calculations to miss part of the response.
 func TestModalEffectiveMassSum(t *testing.T) {
 	// Use 2 beam elements → 2*3 = 6 free DOFs → extract all 6 modes.
 	a, res := buildCantilever2D(t, 2, 6)
@@ -269,6 +390,23 @@ func TestModalEffectiveMassSum(t *testing.T) {
 // FEM with consistent mass converges from above; at n=4 the error is < 0.2 %.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalCantileverConvergence verifies that the fundamental bending frequency
+// of a 4-element 2D cantilever matches the Euler-Bernoulli analytical value
+// within 0.2%, and that the FEM result is an upper bound.
+//
+// Analytical formula (Euler-Bernoulli continuum):
+//
+//	ω₁² = (β₁L)⁴ · EI/(ρAL⁴)   with β₁L = 1.8751 rad
+//
+// Upper-bound property: FEM with consistent mass is a Ritz method that
+// overestimates all natural frequencies. Therefore ω²_FEM > ω²_exact.
+//
+// Parameters: E=200e9, A=0.01 m², Iz=A²/12, L=2.0 m, ρ=7850 kg/m³.
+// Mesh: 4 equal beam elements.
+//
+// Why valuable: if the mass matrix or stiffness matrix has a systematic error
+// (e.g., wrong length scaling), the convergence rate and/or the upper-bound
+// property would be violated.
 func TestModalCantileverConvergence(t *testing.T) {
 	const (
 		E   = 200e9  // Pa
@@ -308,6 +446,23 @@ func TestModalCantileverConvergence(t *testing.T) {
 // on all UX or all UY DOFs).  This is the total structural mass.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalTotalMassConservation verifies that the assembled global mass matrix
+// conserves the total structural mass in each translational direction.
+//
+// Property: for a single-element model, rᵀ·M·r = ρAL where r is the
+// rigid-body vector (all DOFs = 1 in one direction). This is equivalent to:
+//
+//	Σᵢ Σⱼ M[i,j] · rᵢ · rⱼ = total mass
+//
+// For a bar element the total mass is ρAL regardless of the mass matrix type
+// (consistent or lumped).
+//
+// Parameters: single Truss2D from (0,0) to (L=1,0), E=200e9, A=1e-4, ρ=7850.
+// Total mass = 7850·1e-4·1.0 = 0.785 kg.
+//
+// Why valuable: a wrong volume or density factor in the mass assembly would
+// cause the total mass to be incorrect, leading to wrong natural frequencies
+// and wrong effective mass fractions.
 func TestModalTotalMassConservation(t *testing.T) {
 	E, A, L, rho := 200e9, 1e-4, 1.0, 7850.0
 
@@ -347,6 +502,22 @@ func TestModalTotalMassConservation(t *testing.T) {
 // bending frequency as the equivalent 2D beam.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// TestModalBeam3DMatchesBeam2D verifies that the fundamental bending frequency
+// of a 3D beam cantilever equals that of the equivalent 2D beam.
+//
+// Property: for a 3D beam with Iy = Iz, the two bending planes (XY and XZ)
+// have identical stiffness and mass distributions. The lowest bending mode of
+// the 3D beam must therefore equal the single bending mode of the 2D beam.
+//
+// Setup:
+//   - 2D: ElasticBeam2D, single element, clamped at node 0, L=2 m
+//   - 3D: ElasticBeam3D with Iy=Iz, same L, clamped all 6 DOFs at node 0
+//
+// Expected: |f_3D - f_2D| / f_2D < 1e-6.
+//
+// Why valuable: a discrepancy would indicate that the 3D beam mass matrix
+// uses a different rotational inertia formulation than the 2D beam, or that
+// the mass contribution from the out-of-plane bending DOFs is incorrect.
 func TestModalBeam3DMatchesBeam2D(t *testing.T) {
 	const (
 		E   = 200e9
@@ -418,6 +589,10 @@ func TestModalBeam3DMatchesBeam2D(t *testing.T) {
 // buildCantilever2D builds a 2D cantilever with nElem ElasticBeam2D elements
 // of total length 2 m, runs ModalAnalysis, and returns both the analysis
 // object (for DOM access) and the result.
+//
+// The cantilever is clamped at node 0 (UX, UY, RZ fixed) and free at all
+// other nodes. The element section is a 100mm×100mm square: A=0.01 m²,
+// Iz=A²/12. Steel material: E=200e9 Pa, ρ=7850 kg/m³.
 func buildCantilever2D(t *testing.T, nElem, numModes int) (*analysis.ModalAnalysis, *analysis.ModalResult) {
 	t.Helper()
 	const (
@@ -459,6 +634,9 @@ func buildCantilever2D(t *testing.T, nElem, numModes int) (*analysis.ModalAnalys
 }
 
 // extractFree extracts the sub-vector of phi at the free DOF indices.
+//
+// Used to reduce a full-size mode shape vector to the free-DOF subspace
+// for Rayleigh quotient and orthogonality checks.
 func extractFree(phi []float64, freeDOFs []int) []float64 {
 	v := make([]float64, len(freeDOFs))
 	for i, g := range freeDOFs {
@@ -467,7 +645,9 @@ func extractFree(phi []float64, freeDOFs []int) []float64 {
 	return v
 }
 
-// quadForm computes vᵀ · A · v.
+// quadForm computes the quadratic form vᵀ · A · v.
+//
+// Used to evaluate Rayleigh quotients φᵀ·K·φ and φᵀ·M·φ.
 func quadForm(A interface{ At(int, int) float64 }, v []float64) float64 {
 	n := len(v)
 	s := 0.0
@@ -479,7 +659,10 @@ func quadForm(A interface{ At(int, int) float64 }, v []float64) float64 {
 	return s
 }
 
-// bilinearForm computes uᵀ · A · v.
+// bilinearForm computes the bilinear form uᵀ · A · v.
+//
+// Used to evaluate cross-mode inner products φᵢᵀ·M·φⱼ and φᵢᵀ·K·φⱼ
+// for orthogonality checks.
 func bilinearForm(A interface{ At(int, int) float64 }, u, v []float64) float64 {
 	n := len(u)
 	s := 0.0
@@ -491,7 +674,11 @@ func bilinearForm(A interface{ At(int, int) float64 }, u, v []float64) float64 {
 	return s
 }
 
-// quadFormSlice computes rᵀ · M · r directly from a *mat.Dense.
+// quadFormSlice computes the quadratic form rᵀ · M · r for the total-mass
+// conservation check.
+//
+// The matrix M is accessed via the At(i,j) interface, and the vector r is
+// provided as a plain float64 slice.
 func quadFormSlice(M interface{ At(int, int) float64 }, r []float64, n int) float64 {
 	s := 0.0
 	for i := 0; i < n; i++ {

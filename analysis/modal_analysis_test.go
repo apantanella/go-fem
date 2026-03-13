@@ -15,6 +15,9 @@ import (
 // tol is the relative tolerance used for analytical comparisons.
 const modalTol = 1e-4
 
+// relErr computes the relative error |got - want| / |want|.
+// When want is near zero (|want| < 1e-15) the absolute value of got is returned
+// to avoid division by zero.
 func relErr(got, want float64) float64 {
 	if math.Abs(want) < 1e-15 {
 		return math.Abs(got)
@@ -33,6 +36,27 @@ func relErr(got, want float64) float64 {
 //     k_eff = EA/L,  m_eff = ρAL/3  (only 1/3 of mass at free node from consistent)
 //   But the exact generalized eigenvalue gives ω² = 3E/(ρL²) (bar with fixed base).
 // ─────────────────────────────────────────────────────────────────────────────
+
+// TestModalTruss1DOF verifies the fundamental natural frequency of a single
+// Truss2D element with one free axial degree of freedom.
+//
+// Physical model: axially fixed at node 0, free at node 1.
+// The generalised eigenvalue problem K·φ = ω²·M·φ with the consistent mass
+// matrix for a bar element reduces to a single equation:
+//
+//	(EA/L) · φ = ω² · (ρAL/3) · φ
+//	→ ω² = 3E / (ρL²)
+//
+// This is the exact single-DOF result for a fixed-free bar with consistent mass.
+//
+// Parameters: E=200e9 Pa, A=1e-4 m², L=1.0 m, ρ=7850 kg/m³.
+// Analytical: ω² = 3·200e9 / (7850·1²) ≈ 7.643e7 rad²/s².
+//
+// Tolerance: 1e-4 relative error.
+//
+// Why valuable: this single-DOF case has an exact analytical answer; any error
+// in the eigenvalue solver, consistent-mass assembly, or boundary condition
+// application would produce a different ω².
 func TestModalTruss1DOF(t *testing.T) {
 	// Parameters
 	E := 200e9  // Pa (steel)
@@ -92,6 +116,27 @@ func TestModalTruss1DOF(t *testing.T) {
 //   We use a single ElasticBeam2D element as a coarse approximation.
 //   The single-element FEM gives ω₁² ≈ 12.46·EI/(ρAL⁴)  (Clough & Penzien Table 9-2)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// TestModalCantilever2D verifies the fundamental bending frequency of a
+// single-element 2D cantilever beam against the known single-element FEM reference.
+//
+// Physical model: ElasticBeam2D element, clamped at node 0, free at node 1.
+// The continuum Euler-Bernoulli exact fundamental frequency is:
+//
+//	ω₁² = (β₁L)⁴ · EI/(ρAL⁴)   with β₁L = 1.8751
+//
+// A single finite element overestimates ω₁ (upper-bound property of Ritz),
+// with the known single-element reference value (Clough & Penzien, Table 9-2):
+//
+//	ω₁² ≈ 12.46 · EI/(ρAL⁴)
+//
+// Parameters: E=200e9, A=0.01 m², Iz=A²/12 (square section), L=2 m, ρ=7850.
+//
+// Tolerance: 1% relative to the single-element FEM reference.
+//
+// Why valuable: confirms that the beam consistent-mass matrix (which involves
+// Hermitian shape functions) is assembled correctly; a wrong rotational inertia
+// term would shift the frequency significantly.
 func TestModalCantilever2D(t *testing.T) {
 	// Parameters
 	E := 200e9    // Pa (steel)
@@ -171,6 +216,25 @@ func TestModalCantilever2D(t *testing.T) {
 //   Analytical eigenvalues: ω₁² = (3-√5)k/m, ω₂² = (3+√5)k/m
 //   (Clough & Penzien, consistent mass for uniform bar gives coupling)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// TestModalTruss2DOF verifies that two Truss2D elements in series produce two
+// distinct positive natural frequencies in ascending order.
+//
+// Physical model: two equal-length equal-section bars in series, fixed at
+// node 0 and free at nodes 1 and 2. The consistent mass matrix couples the
+// two free DOFs.
+//
+// Properties checked:
+//  1. ω²₁ > 0 and ω²₂ > 0 (both eigenvalues positive, confirming the
+//     assembled system is positive definite after boundary conditions)
+//  2. ω²₂ > ω²₁ (ascending sort from the eigenvalue solver)
+//
+// Parameters: E=200e9, A=1e-4, L=1.0, ρ=7850. Two elements: 0→1 and 1→2.
+//
+// Why valuable: confirms the eigenvalue sort order and the sign of both
+// eigenvalues. A negative eigenvalue would reveal a non-positive-definite
+// stiffness or mass matrix, and an incorrect sort would break higher-mode
+// participation factor calculations.
 func TestModalTruss2DOF(t *testing.T) {
 	E := 200e9
 	A := 1e-4

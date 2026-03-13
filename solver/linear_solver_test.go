@@ -10,7 +10,17 @@ import (
 )
 
 // buildSPD returns a simple n×n symmetric positive-definite stiffness matrix
-// (tridiagonal: 2 on diagonal, -1 on off-diagonal) and an RHS F = ones.
+// and a load vector, both used as a shared fixture across solver tests.
+//
+// K is the standard tridiagonal finite-difference Laplacian:
+//
+//	K_ii  =  2    (diagonal)
+//	K_i,i±1 = −1  (off-diagonal)
+//
+// It is SPD for any n ≥ 1 with eigenvalues in (0, 4), making it a
+// representative stand-in for a real structural stiffness matrix after
+// Dirichlet BC elimination.  F is the all-ones vector so that the solution
+// u = K⁻¹·F has a smooth, well-conditioned profile.
 func buildSPD(n int) (*mat.Dense, *mat.VecDense) {
 	K := mat.NewDense(n, n, nil)
 	for i := 0; i < n; i++ {
@@ -27,6 +37,13 @@ func buildSPD(n int) (*mat.Dense, *mat.VecDense) {
 	return K, F
 }
 
+// checkResidual is a test helper that measures the relative residual of a
+// linear-system solution and fails the test if it exceeds tol.
+//
+// Metric: ‖K·u − F‖₂ / ‖F‖₂
+//
+// Dividing by ‖F‖₂ gives a scale-independent measure so that the same
+// tolerance applies regardless of the magnitude of the applied load.
 func checkResidual(t *testing.T, name string, K *mat.Dense, F, u *mat.VecDense, tol float64) {
 	t.Helper()
 	n, _ := K.Dims()
@@ -39,6 +56,22 @@ func checkResidual(t *testing.T, name string, K *mat.Dense, F, u *mat.VecDense, 
 	}
 }
 
+// TestSolversAgainstReference cross-validates every linear solver against the
+// dense Cholesky reference on a 20-DOF tridiagonal SPD system.
+//
+// For each solver the test checks two independent conditions:
+//  1. Physical residual: ‖K·u − F‖₂/‖F‖₂ < 1e-8 — the returned vector u
+//     actually satisfies the linear system to engineering precision.
+//  2. Numerical agreement: |u[i] − u_chol[i]| < 1e-8 for every DOF — the
+//     solution is bit-for-bit consistent with the Cholesky baseline, ruling
+//     out solver-specific systematic errors.
+//
+// Solvers under test and their configurations:
+//   - LU{}          — dense LU (no special tuning needed for SPD)
+//   - SkylineLDL{}  — sparse-banded LDL^T (exploits tridiagonal sparsity)
+//   - CG{Tol:1e-12} — Conjugate Gradient, tight tolerance to ensure accuracy
+//   - GMRES{Tol:1e-12, Restart:10} — GMRES with small restart to also verify
+//     restart logic on a system that fits in a single Krylov space
 func TestSolversAgainstReference(t *testing.T) {
 	const n = 20
 	K, F := buildSPD(n)
@@ -78,8 +111,18 @@ func TestSolversAgainstReference(t *testing.T) {
 	}
 }
 
+// TestCGNotSPD verifies that the CG solver detects an indefinite matrix and
+// returns a non-nil error instead of silently producing a wrong result.
+//
+// CG is mathematically guaranteed to converge only for SPD matrices; on
+// indefinite systems it can produce arbitrarily bad results or diverge.
+// The implementation is expected to detect the non-SPD condition (e.g. via
+// a negative diagonal check or a negative inner product during the iteration)
+// and surface it as an error so that callers can fall back to LU or GMRES.
+//
+// The test uses a 3×3 diagonal matrix with a negative first entry (λ₁ = −1),
+// which makes it indefinite while keeping the system simple to reason about.
 func TestCGNotSPD(t *testing.T) {
-	// Indefinite matrix: diagonal entry forced negative.
 	K := mat.NewDense(3, 3, []float64{
 		-1, 0, 0,
 		0, 2, 0,
@@ -92,8 +135,19 @@ func TestCGNotSPD(t *testing.T) {
 	}
 }
 
+// TestGMRESNonSymmetric confirms that GMRES correctly solves a non-symmetric
+// system that Cholesky and CG cannot handle.
+//
+// The 4×4 matrix has an asymmetric sparsity pattern (upper and lower
+// off-diagonals differ) so it is neither symmetric nor positive definite.
+// GMRES is the only solver in the package that is theoretically sound for
+// such systems (e.g. models with ZeroLength spring connectors that break
+// global symmetry).
+//
+// The test checks the relative residual ‖K·u − F‖₂/‖F‖₂ < 1e-8, which is
+// the same criterion used for SPD solvers, confirming that GMRES meets the
+// same engineering accuracy bar regardless of matrix symmetry.
 func TestGMRESNonSymmetric(t *testing.T) {
-	// Non-symmetric 4×4 system.
 	K := mat.NewDense(4, 4, []float64{
 		4, 1, 0, 0,
 		3, 4, 1, 0,

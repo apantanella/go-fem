@@ -9,6 +9,18 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
+// TestElasticBeam2D_Symmetry verifies that the 6×6 element stiffness matrix
+// of a 2D elastic beam is symmetric.
+//
+// Property: Ke = Keᵀ (self-adjointness). Applies to the full 6×6 matrix
+// including the coupling between bending and axial DOFs.
+//
+// Parameters: beam from (0,0) to (5,0), E=200000, A=0.01, Iz=1e-4.
+//
+// Expected: |Ke[i,j] - Ke[j,i]| < 1e-4 for all i < j.
+//
+// Why valuable: catches sign errors in the off-diagonal bending-shear coupling
+// entries (e.g., the 6EI/L² term that couples rotational and translational DOFs).
 func TestElasticBeam2D_Symmetry(t *testing.T) {
 	nodes := [2]int{0, 1}
 	coords := [2][2]float64{{0, 0}, {5, 0}}
@@ -27,6 +39,18 @@ func TestElasticBeam2D_Symmetry(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_AxialStiffness verifies the axial stiffness entry K[0,0]
+// of a 2D elastic beam element aligned with the X axis.
+//
+// Property: the axial mode is decoupled from bending for a straight beam.
+// The stiffness coefficient at the first translational DOF equals:
+//
+//	K[0,0] = EA/L
+//
+// Parameters: E=200000, A=0.02, L=4; expected EA/L = 1000.
+//
+// Why valuable: confirms the axial sub-block is assembled correctly and that
+// A is not accidentally replaced by a moment-of-inertia value.
 func TestElasticBeam2D_AxialStiffness(t *testing.T) {
 	L := 4.0
 	E := 200000.0
@@ -44,6 +68,19 @@ func TestElasticBeam2D_AxialStiffness(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_BendingStiffness verifies the two key bending stiffness
+// coefficients for a 2D Euler-Bernoulli beam along the X axis.
+//
+// Properties (DOF layout [UX₀,UY₀,RZ₀,UX₁,UY₁,RZ₁]):
+//
+//	K[1,1] = 12·E·Iz/L³  (transverse stiffness, equal-and-opposite unit displacements)
+//	K[2,2] =  4·E·Iz/L   (rotational stiffness, near-end moment for unit rotation)
+//
+// Parameters: E=210000, L=5, Iz=8.33e-6.
+//
+// Why valuable: checks both the cubic L-dependence of the transverse entry and
+// the linear L-dependence of the rotational entry; a factor-of-3 error (mixing
+// 4EI/L with 12EI/L³) would be caught.
 func TestElasticBeam2D_BendingStiffness(t *testing.T) {
 	L := 5.0
 	E := 210000.0
@@ -68,6 +105,19 @@ func TestElasticBeam2D_BendingStiffness(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_RigidBodyTranslation verifies that a uniform rigid-body
+// translation produces zero nodal forces for a 2D elastic beam.
+//
+// Property: Ke · u_rigid = 0 for u_rigid representing equal translation at both
+// nodes. Tested for both X and Y directions on a non-axis-aligned beam so that
+// the full local-to-global rotation matrix is exercised.
+//
+// Parameters: beam from (0,0) to (3,4) (diagonal orientation), E=200000,
+// A=0.01, Iz=1e-4. Tolerance 1e-4 due to accumulated round-off in the
+// rotation matrix.
+//
+// Why valuable: catches any rotation-matrix error that would cause a
+// displacement-free rigid-body motion to generate spurious internal forces.
 func TestElasticBeam2D_RigidBodyTranslation(t *testing.T) {
 	nodes := [2]int{0, 1}
 	coords := [2][2]float64{{0, 0}, {3, 4}}
@@ -92,6 +142,29 @@ func TestElasticBeam2D_RigidBodyTranslation(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_EndForces verifies the local end forces recovered by a
+// single 2D beam element under a cantilever (tip-load) displacement pattern.
+//
+// Physical scenario: fixed at node 0, tip displacement δ at node 1.
+// The equivalent tip load producing δ under pure bending is (cantilever formula):
+//
+//	P = 3·E·Iz·δ / L³
+//
+// The corresponding tip rotation is:
+//
+//	θ_tip = P·L² / (2·E·Iz)
+//
+// Expected end forces in the local frame (N = axial, V = shear, M = moment):
+//
+//	Node i (fixed end): N=0, V=-P, M=-P·L
+//	Node j (free end):  N=0, V=+P, M=0
+//
+// Parameters: E=210000, L=3, A=0.01, Iz=1e-4, δ=0.001.
+//
+// Why valuable: confirms that the EndForces() method correctly transforms from
+// the nodal displacement vector back to local section forces, and verifies the
+// sign convention (V and M at the two ends must satisfy equilibrium: V_i + V_j = 0,
+// M_i + M_j + V_i·L = 0).
 func TestElasticBeam2D_EndForces(t *testing.T) {
 	// Horizontal cantilever beam: fixed at node 0, tip load Fy at node 1
 	L := 3.0
@@ -141,6 +214,21 @@ func TestElasticBeam2D_EndForces(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_MatchesBeam3D verifies that the in-plane stiffness sub-block
+// of a 3D beam matches the corresponding 2D beam stiffness matrix entry-by-entry.
+//
+// Property: for a beam in the XY plane (Z=0) the 2D formulation must be a
+// consistent specialisation of the 3D formulation. The DOF mapping is:
+//
+//	2D index: 0   1   2   3   4   5
+//	3D index: 0   1   5   6   7  11
+//	DOF:     UX₀ UY₀ RZ₀ UX₁ UY₁ RZ₁
+//
+// Parameters: E=210000, G=80000, A=0.01, Iz=1e-4, L=5.
+//
+// Why valuable: a discrepancy would indicate an inconsistency between the 2D
+// and 3D local stiffness formulations (e.g., a wrong sign in the 2D bending
+// rows relative to the 3D Bernoulli-Euler sub-block).
 func TestElasticBeam2D_MatchesBeam3D(t *testing.T) {
 	// For a beam in the XY plane, the 2D beam stiffness should match the
 	// corresponding rows/cols of the 3D beam stiffness.
@@ -183,6 +271,29 @@ func TestElasticBeam2D_MatchesBeam3D(t *testing.T) {
 	}
 }
 
+// TestElasticBeam2D_EquivalentNodalLoad verifies the work-equivalent nodal load
+// vector for a uniformly distributed transverse load (UDL) on a 2D beam.
+//
+// Physical derivation (consistent nodal loads via virtual work):
+// For a UDL of intensity q (force per unit length) over a beam of length L,
+// the equivalent nodal forces and moments in the local frame are:
+//
+//	Fy_i = Fy_j = -q·L/2      (equal transverse reactions)
+//	Mz_i = -q·L²/12           (hogging moment at near end)
+//	Mz_j = +q·L²/12           (sagging moment at far end)
+//
+// Parameters: L=4, E=200000 (not used for load calculation), q=10.
+//
+//	Fy = -10·4/2 = -20  (downward, negative Y direction)
+//	Mz_i = -10·16/12 ≈ -13.33
+//	Mz_j = +10·16/12 ≈ +13.33
+//
+// The load direction vector is (0,-1,0) with magnitude q=10, giving
+// a downward load on a horizontal beam (local = global).
+//
+// Why valuable: confirms the EquivalentNodalLoad() method applies the
+// correct Hermitian shape-function integrals; an error in the sign convention
+// or the L² factor in the moment terms would be detected.
 func TestElasticBeam2D_EquivalentNodalLoad(t *testing.T) {
 	L := 4.0
 	E := 200000.0

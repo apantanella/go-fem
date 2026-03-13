@@ -9,6 +9,20 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
+// TestTet10_Symmetry verifies that the 30×30 element stiffness matrix of the
+// 10-node quadratic tetrahedron (Tet10) is symmetric.
+//
+// Property: Ke = Keᵀ. For Ke = ∫ Bᵀ·D·B dV with D symmetric this holds
+// algebraically; numerical quadrature must not break it.
+//
+// Parameters: unit tet with 4 corners at the standard positions and 6 midside
+// nodes at edge midpoints (via makeTet10), E=200000, ν=0.3.
+//
+// Expected: relative asymmetry |Ke[i,j]-Ke[j,i]| / avg < 1e-6 for entries
+// with avg > 1e-10.
+//
+// Why valuable: an unsymmetric Ke from the Tet10 would indicate an error in
+// the quadratic shape-function derivatives or the Gauss-quadrature loop.
 func TestTet10_Symmetry(t *testing.T) {
 	tet := makeTet10()
 	ke := tet.GetTangentStiffness()
@@ -25,6 +39,22 @@ func TestTet10_Symmetry(t *testing.T) {
 	}
 }
 
+// TestTet10_RigidBody verifies that a uniform rigid-body translation produces
+// zero nodal forces for the Tet10 element.
+//
+// Property: Ke · u_rigid = 0 for u_rigid = [δ,0,0, δ,0,0, ...] applied to
+// all 10 nodes. Pure translation implies zero strain everywhere (the quadratic
+// shape functions reproduce constant fields exactly), so no internal forces
+// should arise.
+//
+// Parameters: unit Tet10 (makeTet10), E=200000, ν=0.3.
+// Directions X, Y, Z are tested individually.
+//
+// Expected: |Ke · u_rigid|_∞ < 1e-4 for each direction.
+//
+// Why valuable: a violation would indicate that the quadratic shape-function
+// gradients do not sum to zero (partition-of-unity error), producing
+// spurious strain under rigid translation.
 func TestTet10_RigidBody(t *testing.T) {
 	tet := makeTet10()
 	ke := tet.GetTangentStiffness()
@@ -46,6 +76,18 @@ func TestTet10_RigidBody(t *testing.T) {
 	}
 }
 
+// TestTet10_PositiveDiag verifies that all 30 diagonal entries of the Tet10
+// stiffness matrix are strictly positive.
+//
+// Property: a necessary condition for positive semi-definiteness is that all
+// diagonal entries are non-negative. For a well-formed quadratic tet element
+// each DOF must have positive self-stiffness.
+//
+// Parameters: unit Tet10 (makeTet10), E=200000, ν=0.3.
+//
+// Why valuable: a zero or negative diagonal entry for a midside node DOF
+// would indicate that the midside node shape function produces no strain energy
+// (possible if the Gauss-point positions are incorrectly placed on the element).
 func TestTet10_PositiveDiag(t *testing.T) {
 	tet := makeTet10()
 	ke := tet.GetTangentStiffness()
@@ -56,8 +98,19 @@ func TestTet10_PositiveDiag(t *testing.T) {
 	}
 }
 
-// makeTet10 creates a standard 10-node tet with corner nodes at unit tet
-// and midside nodes at edge midpoints.
+// makeTet10 creates a standard 10-node quadratic tetrahedron with corner nodes
+// at the unit-tet positions and midside nodes at the midpoints of each edge.
+//
+// Node numbering:
+//   - 0–3: corner nodes at (0,0,0), (1,0,0), (0,1,0), (0,0,1)
+//   - 4:   midside of edge 0–1 at (0.5, 0, 0)
+//   - 5:   midside of edge 1–2 at (0.5, 0.5, 0)
+//   - 6:   midside of edge 0–2 at (0, 0.5, 0)
+//   - 7:   midside of edge 0–3 at (0, 0, 0.5)
+//   - 8:   midside of edge 1–3 at (0.5, 0, 0.5)
+//   - 9:   midside of edge 2–3 at (0, 0.5, 0.5)
+//
+// The material is steel-like: E=200000, ν=0.3.
 func makeTet10() *Tet10 {
 	nodes := [10]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
 	coords := [10][3]float64{

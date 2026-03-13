@@ -7,6 +7,21 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
+// TestShellMITC4_Symmetry verifies that the 24×24 element stiffness matrix
+// of a flat MITC4 shell element is symmetric.
+//
+// Property: Ke = Keᵀ (self-adjointness). The MITC4 formulation combines a
+// bilinear membrane with a mixed-interpolation plate bending component; both
+// sub-matrices must combine symmetrically.
+//
+// Parameters: flat shell in the XY plane, 2×1 rectangle (nodes at
+// (0,0,0), (2,0,0), (2,1,0), (0,1,0)), E=200000, ν=0.3, thickness=0.1.
+//
+// Expected: relative asymmetry |Ke[i,j]-Ke[j,i]| / avg < 1e-6 for all i < j.
+// An absolute threshold of 1e-10 is used for near-zero entries.
+//
+// Why valuable: catches unsymmetric contributions from the drilling DOF
+// regularisation or from an incorrectly transposed transformation matrix.
 func TestShellMITC4_Symmetry(t *testing.T) {
 	// Flat shell in XY plane
 	nodes := [4]int{0, 1, 2, 3}
@@ -32,6 +47,24 @@ func TestShellMITC4_Symmetry(t *testing.T) {
 	}
 }
 
+// TestShellMITC4_RigidBodyTranslation verifies that a uniform rigid-body
+// translation in each global direction produces zero nodal forces.
+//
+// Property: Ke · u_rigid = 0 for u_rigid = [δ_d, 0, 0, 0, 0, 0, ...]
+// with δ_d = 1 in the d-th translational DOF for each of the 4 nodes.
+// A flat shell has three translational rigid-body modes: X, Y (in-plane)
+// and Z (out-of-plane).
+//
+// Parameters: unit square shell (1×1) in XY plane, E=200000, ν=0.3,
+// thickness=0.05.
+//
+// Tolerance: 1e-3. This is larger than for bar elements because the MITC4
+// element includes a drilling DOF stabilisation term that introduces a
+// small but finite numerical coupling.
+//
+// Why valuable: a violation indicates that the drilling regularisation or
+// the local-to-global frame transformation contains a residual that breaks
+// the null-space property of rigid-body motions.
 func TestShellMITC4_RigidBodyTranslation(t *testing.T) {
 	nodes := [4]int{0, 1, 2, 3}
 	coords := [4][3]float64{
@@ -62,6 +95,21 @@ func TestShellMITC4_RigidBodyTranslation(t *testing.T) {
 	}
 }
 
+// TestShellMITC4_PositiveDiag verifies that all 24 diagonal entries of the
+// MITC4 shell stiffness matrix are strictly positive.
+//
+// Property: for a positive semi-definite stiffness matrix, all diagonal entries
+// must be non-negative. For a constrained (non-singular) element in a mesh
+// context, all diagonal entries should be strictly positive, which is a
+// necessary condition for the Cholesky factorisation used in direct solvers.
+//
+// Parameters: unit square, E=200000, ν=0.3, thickness=0.1.
+// Each node has 6 DOFs: UX, UY, UZ, RX, RY, RZ.
+// The drilling DOF (RZ about the shell normal) is stabilised explicitly.
+//
+// Why valuable: a zero or negative diagonal entry would indicate a missing
+// stiffness contribution for that DOF (e.g., an unrestrained drilling mode)
+// and would cause a singular or indefinite global stiffness matrix.
 func TestShellMITC4_PositiveDiag(t *testing.T) {
 	nodes := [4]int{0, 1, 2, 3}
 	coords := [4][3]float64{
