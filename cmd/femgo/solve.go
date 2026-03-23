@@ -100,7 +100,9 @@ func solveProblem(input ProblemInput) ProblemOutput {
 
 	// --- Build materials map ---
 	mats := make(map[string]material.Material3D, len(input.Materials))
+	matsRaw := make(map[string]MaterialInput, len(input.Materials))
 	for _, mi := range input.Materials {
+		matsRaw[mi.ID] = mi
 		switch mi.Type {
 		case "isotropic_linear":
 			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
@@ -117,6 +119,12 @@ func solveProblem(input ProblemInput) ProblemOutput {
 		default:
 			return errorResponse("unknown material type: %s", mi.Type)
 		}
+	}
+
+	// --- Build sections map ---
+	secs := make(map[string]SectionInput, len(input.Sections))
+	for _, si := range input.Sections {
+		secs[si.ID] = si
 	}
 
 	// --- Build domain ---
@@ -149,7 +157,7 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	}
 
 	for eid, ei := range input.Elements {
-		elem, err := createElement(eid, ei, dom, mats)
+		elem, err := createElement(eid, ei, dom, mats, matsRaw, secs)
 		if err != nil {
 			return errorResponse("element %d: %v", eid, err)
 		}
@@ -288,8 +296,68 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	}
 }
 
+// resolveElementProps merges material and section properties into the element.
+// Inline element values (non-zero) take precedence over referenced values.
+func resolveElementProps(ei ElementInput, matsRaw map[string]MaterialInput, secs map[string]SectionInput) (ElementInput, error) {
+	// --- Resolve material properties (E, Nu, G) ---
+	if ei.Material != "" {
+		mi, ok := matsRaw[ei.Material]
+		if !ok {
+			return ei, fmt.Errorf("unknown material: %s", ei.Material)
+		}
+		if ei.E == 0 {
+			ei.E = mi.E
+		}
+		if ei.Nu == 0 {
+			ei.Nu = mi.Nu
+		}
+		// Auto-compute G for isotropic materials when not specified
+		if ei.G == 0 && mi.E > 0 && mi.Nu > 0 {
+			ei.G = mi.E / (2 * (1 + mi.Nu))
+		}
+	}
+
+	// --- Resolve section properties ---
+	if ei.Section != "" {
+		si, ok := secs[ei.Section]
+		if !ok {
+			return ei, fmt.Errorf("unknown section: %s", ei.Section)
+		}
+		if ei.A == 0 {
+			ei.A = si.A
+		}
+		if ei.Iy == 0 {
+			ei.Iy = si.Iy
+		}
+		if ei.Iz == 0 {
+			ei.Iz = si.Iz
+		}
+		if ei.J == 0 {
+			ei.J = si.J
+		}
+		if ei.Asy == 0 {
+			ei.Asy = si.Asy
+		}
+		if ei.Asz == 0 {
+			ei.Asz = si.Asz
+		}
+		if ei.Thickness == 0 {
+			ei.Thickness = si.Thickness
+		}
+	}
+
+	return ei, nil
+}
+
 // createElement builds the appropriate element from JSON input.
-func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string]material.Material3D) (element.Element, error) {
+func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string]material.Material3D, matsRaw map[string]MaterialInput, secs map[string]SectionInput) (element.Element, error) {
+	// Resolve material/section references into inline properties
+	var err error
+	ei, err = resolveElementProps(ei, matsRaw, secs)
+	if err != nil {
+		return nil, err
+	}
+
 	nn := len(dom.Nodes)
 
 	// Helper: validate and extract 3D node coordinates
@@ -886,7 +954,9 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 
 	// ── Build materials ───────────────────────────────────────────────────
 	mats := make(map[string]material.Material3D, len(input.Materials))
+	matsRaw := make(map[string]MaterialInput, len(input.Materials))
 	for _, mi := range input.Materials {
+		matsRaw[mi.ID] = mi
 		switch mi.Type {
 		case "isotropic_linear":
 			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
@@ -903,6 +973,12 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 		default:
 			return errorResponse("unknown material type: %s", mi.Type)
 		}
+	}
+
+	// ── Build sections map ───────────────────────────────────────────────
+	secs := make(map[string]SectionInput, len(input.Sections))
+	for _, si := range input.Sections {
+		secs[si.ID] = si
 	}
 
 	// ── Build domain ──────────────────────────────────────────────────────
@@ -934,7 +1010,7 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 	}
 
 	for eid, ei := range input.Elements {
-		elem, err2 := createElement(eid, ei, dom, mats)
+		elem, err2 := createElement(eid, ei, dom, mats, matsRaw, secs)
 		if err2 != nil {
 			return errorResponse("element %d: %v", eid, err2)
 		}
@@ -1098,7 +1174,14 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 
 // createElementNL builds any element type, routing nl_truss_3d / nl_truss_2d
 // to their UniaxialMaterial constructors and all other types to createElement.
-func createElementNL(eid int, ei ElementInput, dom *domain.Domain, mats map[string]material.Material3D, matsUni map[string]material.UniaxialMaterial) (element.Element, error) {
+func createElementNL(eid int, ei ElementInput, dom *domain.Domain, mats map[string]material.Material3D, matsUni map[string]material.UniaxialMaterial, matsRaw map[string]MaterialInput, secs map[string]SectionInput) (element.Element, error) {
+	// Resolve material/section references into inline properties
+	var resolveErr error
+	ei, resolveErr = resolveElementProps(ei, matsRaw, secs)
+	if resolveErr != nil {
+		return nil, resolveErr
+	}
+
 	nn := len(dom.Nodes)
 
 	resolveUni := func(id string) (material.UniaxialMaterial, error) {
@@ -1162,7 +1245,7 @@ func createElementNL(eid int, ei ElementInput, dom *domain.Domain, mats map[stri
 		return truss.NewNLTruss2D(eid, n2, c2, ei.A, m), nil
 
 	default:
-		return createElement(eid, ei, dom, mats)
+		return createElement(eid, ei, dom, mats, matsRaw, secs)
 	}
 }
 
@@ -1174,10 +1257,12 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 
 	// ── Build Material3D map (for solid/shell elements) ──────────────────
 	mats := make(map[string]material.Material3D, len(input.Materials))
+	matsRaw := make(map[string]MaterialInput, len(input.Materials))
 	// ── Build UniaxialMaterial map (for nl_truss elements) ───────────────
 	matsUni := make(map[string]material.UniaxialMaterial)
 
 	for _, mi := range input.Materials {
+		matsRaw[mi.ID] = mi
 		switch mi.Type {
 		case "isotropic_linear":
 			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
@@ -1206,6 +1291,12 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 		default:
 			return errorResponse("unknown material type: %s", mi.Type)
 		}
+	}
+
+	// ── Build sections map ───────────────────────────────────────────────
+	secs := make(map[string]SectionInput, len(input.Sections))
+	for _, si := range input.Sections {
+		secs[si.ID] = si
 	}
 
 	// ── Build domain ─────────────────────────────────────────────────────
@@ -1237,7 +1328,7 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 	}
 
 	for eid, ei := range input.Elements {
-		elem, err := createElementNL(eid, ei, dom, mats, matsUni)
+		elem, err := createElementNL(eid, ei, dom, mats, matsUni, matsRaw, secs)
 		if err != nil {
 			return errorResponse("element %d: %v", eid, err)
 		}

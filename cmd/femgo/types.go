@@ -8,6 +8,7 @@ type ProblemInput struct {
 	Dimensions         string          `json:"dimensions,omitempty"`    // "2D" | "3D" (optional – triggers compatibility check)
 	AnalysisType       string          `json:"analysis_type,omitempty"` // "" | "static" | "response_spectrum" | "nonlinear_static"
 	Materials          []MaterialInput `json:"materials"`
+	Sections           []SectionInput  `json:"sections,omitempty"`
 	Nodes              [][3]float64    `json:"nodes"`
 	Elements           []ElementInput  `json:"elements"`
 	BoundaryConditions []BCInput       `json:"boundary_conditions"`
@@ -58,6 +59,17 @@ type SolverOptions struct {
 	ZeroTol float64 `json:"zero_tol,omitempty"` // sparsity threshold for pattern detection (SkylineLDL)
 }
 
+type SectionInput struct {
+	ID        string  `json:"id"`
+	A         float64 `json:"A,omitempty"`         // Cross-sectional area
+	Iy        float64 `json:"Iy,omitempty"`        // Moment of inertia y
+	Iz        float64 `json:"Iz,omitempty"`        // Moment of inertia z
+	J         float64 `json:"J,omitempty"`         // Torsion constant
+	Asy       float64 `json:"Asy,omitempty"`       // Effective shear area y (Timoshenko)
+	Asz       float64 `json:"Asz,omitempty"`       // Effective shear area z (Timoshenko)
+	Thickness float64 `json:"thickness,omitempty"` // Shell/plate thickness
+}
+
 type MaterialInput struct {
 	ID   string `json:"id"`
 	Type string `json:"type"` // "isotropic_linear" | "orthotropic_linear" | "steel_bilinear" | "concrete_pararect"
@@ -88,8 +100,9 @@ type MaterialInput struct {
 }
 
 type ElementInput struct {
-	Type     string `json:"type"`     // element type (e.g. tet4, hexa8, shell_mitc4, dkt3)
-	Material string `json:"material"` // material id (for solid elements)
+	Type     string `json:"type"`              // element type (e.g. tet4, hexa8, shell_mitc4, dkt3)
+	Material string `json:"material,omitempty"` // material id (references materials[].id)
+	Section  string `json:"section,omitempty"`  // section id (references sections[].id)
 	Nodes    []int  `json:"nodes"`
 
 	// Truss parameters
