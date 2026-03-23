@@ -696,7 +696,7 @@ Set `"analysis_type": "response_spectrum"` to switch to seismic mode. The `"load
 |-------|---------------|
 | `N`, `sigma` | `truss_3d`, `corot_truss_3d`, `truss_2d` — axial force and stress |
 | `end_i`, `end_j` | beam elements — 6-component cross-section forces in local frame (N, Vy, Vz, Mx, My, Mz) |
-| `stress` | solid elements (`tet4_3d`, `hexa8_3d`, …) and 2D quads — centroidal Cauchy stress + von Mises |
+| `stress` | solid elements (`tet4_3d`, `hexa8_3d`, …) and 2D quads — centroidal Cauchy stress + `von_mises` (von Mises) + `tresca` (Tresca) |
 | `shell_forces` | `shell_mitc4_3d` — in-plane resultants Nx, Ny, Nxy and bending moments Mx, My, Mxy per unit length |
 | `spring_forces` | all `zerolength_*` types — spring forces/moments (tension positive). Fields: `Fx`, `Fy`, `Fz`, `Mx`, `My`, `Mz`; only active components are included |
 

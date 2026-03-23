@@ -276,7 +276,7 @@ type BeamEndOutput struct {
 	Mz float64 `json:"Mz"`
 }
 
-// StressOutput holds the Cauchy stress components and von Mises equivalent.
+// StressOutput holds the Cauchy stress components and equivalent stress criteria.
 // For plane elements (quad4) szz, tyz, txz are zero.
 type StressOutput struct {
 	Sxx      float64 `json:"sxx"`
@@ -286,6 +286,7 @@ type StressOutput struct {
 	Tyz      float64 `json:"tyz"`
 	Txz      float64 `json:"txz"`
 	VonMises float64 `json:"von_mises"`
+	Tresca   float64 `json:"tresca"`
 }
 
 // ShellForcesOutput holds in-plane force and bending moment resultants per unit length

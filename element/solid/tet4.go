@@ -191,3 +191,48 @@ func VonMises(s [6]float64) float64 {
 	a, b, c := s[0]-s[1], s[1]-s[2], s[2]-s[0]
 	return math.Sqrt(0.5 * (a*a + b*b + c*c + 6*(s[3]*s[3]+s[4]*s[4]+s[5]*s[5])))
 }
+
+// Tresca computes the Tresca equivalent stress (σ₁ − σ₃, max minus min principal
+// stress) from a Voigt stress vector [sxx, syy, szz, txy, tyz, txz].
+//
+// Principal stresses are obtained analytically via the trigonometric (Lode-angle)
+// method for the 3×3 symmetric stress tensor. Works for both 3D and plane-stress
+// cases (where szz = tyz = txz = 0).
+func Tresca(s [6]float64) float64 {
+	sxx, syy, szz := s[0], s[1], s[2]
+	txy, tyz, txz := s[3], s[4], s[5]
+
+	p := (sxx + syy + szz) / 3.0
+
+	// Deviatoric components
+	dx, dy, dz := sxx-p, syy-p, szz-p
+
+	// Second deviatoric invariant J₂ = ½ tr(s_dev²)
+	j2 := 0.5*(dx*dx+dy*dy+dz*dz) + txy*txy + tyz*tyz + txz*txz
+
+	if j2 < 1e-30 {
+		// Hydrostatic state — all principal stresses equal p, Tresca = 0
+		return 0
+	}
+
+	// Third deviatoric invariant J₃ = det(s_dev)
+	j3 := dx*(dy*dz-tyz*tyz) - txy*(txy*dz-tyz*txz) + txz*(txy*tyz-dy*txz)
+
+	// Lode angle θ ∈ [0, π/3]
+	arg := 3.0 * math.Sqrt(3.0) * j3 / (2.0 * math.Pow(j2, 1.5))
+	if arg > 1 {
+		arg = 1
+	} else if arg < -1 {
+		arg = -1
+	}
+	theta := math.Acos(arg) / 3.0
+
+	r := 2.0 * math.Sqrt(j2/3.0)
+	s1 := p + r*math.Cos(theta)
+	s2 := p + r*math.Cos(theta-2.0*math.Pi/3.0)
+	s3 := p + r*math.Cos(theta+2.0*math.Pi/3.0)
+
+	maxS := math.Max(s1, math.Max(s2, s3))
+	minS := math.Min(s1, math.Min(s2, s3))
+	return maxS - minS
+}

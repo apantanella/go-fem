@@ -871,32 +871,32 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Mz: ef2.J[2]}
 		case *solid.Tet4:
 			s := e.StressCentroid()
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s), Tresca: solid.Tresca(s)}
 		case *solid.Hexa8:
 			s := e.StressCentroid()
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s), Tresca: solid.Tresca(s)}
 		case *solid.Tet10:
 			s := e.StressCentroid()
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s), Tresca: solid.Tresca(s)}
 		case *solid.Brick20:
 			s := e.StressCentroid()
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s)}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Szz: s[2], Txy: s[3], Tyz: s[4], Txz: s[5], VonMises: solid.VonMises(s), Tresca: solid.Tresca(s)}
 		case *quad.Quad4:
 			s := e.StressCentroid()
-			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+			sv := [6]float64{s[0], s[1], 0, s[2], 0, 0}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: solid.VonMises(sv), Tresca: solid.Tresca(sv)}
 		case *quad.Quad8:
 			s := e.StressCentroid()
-			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+			sv := [6]float64{s[0], s[1], 0, s[2], 0, 0}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: solid.VonMises(sv), Tresca: solid.Tresca(sv)}
 		case *quad.Tri3:
 			s := e.StressCentroid()
-			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+			sv := [6]float64{s[0], s[1], 0, s[2], 0, 0}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: solid.VonMises(sv), Tresca: solid.Tresca(sv)}
 		case *quad.Tri6:
 			s := e.StressCentroid()
-			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
-			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+			sv := [6]float64{s[0], s[1], 0, s[2], 0, 0}
+			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: solid.VonMises(sv), Tresca: solid.Tresca(sv)}
 		case *shell.WinklerShellMITC4:
 			sf := e.LocalForces()
 			ef.ShellForces = &ShellForcesOutput{Nx: sf.Nx, Ny: sf.Ny, Nxy: sf.Nxy, Mx: sf.Mx, My: sf.My, Mxy: sf.Mxy}
