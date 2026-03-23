@@ -147,8 +147,8 @@ func (t *Tet4) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 // For a linear tetrahedron: Mₑ[3n+k, 3m+k] = ρV/20·(1 + δₙₘ)  (n,m = nodes 0..3).
 func (t *Tet4) GetMassMatrix(rho float64) *mat.Dense {
 	me := mat.NewDense(12, 12, nil)
-	diag := rho * t.vol / 10.0  // 2/20
-	offD := rho * t.vol / 20.0  // 1/20
+	diag := rho * t.vol / 10.0 // 2/20
+	offD := rho * t.vol / 20.0 // 1/20
 	for n := 0; n < 4; n++ {
 		for m := 0; m < 4; m++ {
 			v := offD

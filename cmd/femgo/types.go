@@ -100,7 +100,7 @@ type MaterialInput struct {
 }
 
 type ElementInput struct {
-	Type     string `json:"type"`              // element type (e.g. tet4, hexa8, shell_mitc4, dkt3)
+	Type     string `json:"type"`               // element type (e.g. tet4, hexa8, shell_mitc4, dkt3)
 	Material string `json:"material,omitempty"` // material id (references materials[].id)
 	Section  string `json:"section,omitempty"`  // section id (references sections[].id)
 	Nodes    []int  `json:"nodes"`
