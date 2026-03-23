@@ -373,6 +373,50 @@ T := solver.PeriodSeconds(omega2)  // ω² → T [s]
 3. Solve the standard symmetric problem A·y = ω²·y via `gonum mat.EigenSym`
 4. Back-transform φ = L⁻ᵀ·y (M-normalised: φᵀ·M·φ = 1)
 
+### ResponseSpectrumAnalysis
+
+Multi-mode seismic analysis (NTC 2018 §7 / Eurocode 8) — builds on top of `ModalAnalysis`:
+
+1. Run modal analysis → natural periods, M-normalised mode shapes, participation factors
+2. Evaluate spectral acceleration `Sa(Tk)` from piecewise-linear elastic spectrum
+3. Per mode k, per direction d: modal displacement vector `u_{k,d}[i] = Sd_k · Γ_{k,d} · φ_k[i]`  where `Sd_k = Sa(Tk)/ωk²`
+4. Combine over modes with **CQC** (Der Kiureghian 1981) or SRSS; combine orthogonal directions by SRSS (EC8 §4.3.3.5.2)
+5. Report: peak base shear per direction, peak displacement envelope per node
+
+```go
+// Build piecewise-linear elastic spectrum Sa(T)
+spec, err := analysis.NewSpectrum(
+    []float64{0, 0.15, 0.50, 1.0, 2.0, 4.0},           // periods [s]
+    []float64{1838, 7357, 7357, 3678, 1839, 919},        // Sa [mm/s²]
+)
+
+a := &analysis.ResponseSpectrumAnalysis{
+    Dom:          dom,
+    Masses:       []domain.ElementMass{{ElemIdx: 0, Rho: 7.85e-6}},
+    Spectrum:     spec,
+    NumModes:     10,
+    DampingRatio: 0.05,       // ξ = 5 %
+    UseSRSS:      false,      // default: CQC
+    Directions:   analysis.DirY, // horizontal Y only (or DirXYZ)
+}
+res, err := a.Run()
+
+res.Modal.Periods[k]          // T_k [s]
+res.Modal.EffectiveMass[k][d] // effective mass fraction for mode k, direction d
+res.MaxBaseShear              // [3]float64 — CQC peak base shear X/Y/Z
+res.MaxDisplacements          // [][6]float64 — peak envelope per node
+```
+
+**Helpers:**
+
+```go
+// CQC correlation coefficient ρᵢⱼ (Der Kiureghian 1981)
+rho := analysis.CQCCorrelation(omegaI, omegaJ, xi)
+
+// Direction bitmasks
+analysis.DirX | analysis.DirY | analysis.DirZ  // = DirXYZ (all three)
+```
+
 ---
 
 ## HTTP API Server
@@ -403,6 +447,8 @@ go build -o femgo ./cmd/femgo
 | `GET` | `/` | API info: version, supported elements, materials, solvers |
 
 ### POST /solve – Request Format
+
+#### Static linear analysis (default)
 
 ```json
 {
@@ -459,7 +505,98 @@ All load types use a `"type"` discriminator field. Omitting `"type"` is equivale
 ]
 ```
 
-### POST /solve – Response Format
+#### Response Spectrum Analysis
+
+Set `"analysis_type": "response_spectrum"` to switch to seismic mode. The `"loads"` array is ignored (seismic inertia loads are generated internally).
+
+```json
+{
+  "analysis_type": "response_spectrum",
+  "dimensions": "2D",
+  "nodes": [ [0,0,0], [0,3600,0], [6000,0,0], [6000,3600,0] ],
+  "elements": [
+    {"type": "elastic_beam_2d", "nodes": [0,1], "E": 210000, "A": 7808, "Iz": 56960000},
+    {"type": "elastic_beam_2d", "nodes": [2,3], "E": 210000, "A": 7808, "Iz": 56960000},
+    {"type": "elastic_beam_2d", "nodes": [1,3], "E": 210000, "A": 7808, "Iz": 56960000}
+  ],
+  "boundary_conditions": [
+    {"node": 0, "dofs": [0,1,2]},
+    {"node": 2, "dofs": [0,1,2]}
+  ],
+  "loads": [],
+  "modal": {
+    "num_modes": 3,
+    "masses": [
+      {"element": 0, "rho": 7.85e-6},
+      {"element": 1, "rho": 7.85e-6},
+      {"element": 2, "rho": 7.85e-6}
+    ]
+  },
+  "spectrum": [
+    [0.0, 1838], [0.15, 7357], [0.5, 7357],
+    [1.0, 3678], [2.0, 1839], [4.0,  919]
+  ],
+  "rsa": {
+    "damping_ratio": 0.05,
+    "combination":  "cqc",
+    "directions":   "y"
+  }
+}
+```
+
+**`"modal"`** *(required for RSA)*:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `num_modes` | int | Number of eigenmodes to extract (≥ 1) |
+| `masses` | array | `[{"element": idx, "rho": density}, ...]` — element mass densities |
+
+**`"spectrum"`** *(required for RSA)*: array of `[T, Sa]` pairs defining the piecewise-linear elastic design spectrum. Must have ≥ 2 points, T strictly ascending.
+
+**`"rsa"`** (optional):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `damping_ratio` | `0.05` | Uniform modal damping ratio ξ (e.g. 0.05 = 5 %) |
+| `combination` | `"cqc"` | Modal combination rule: `"cqc"` (default) or `"srss"` |
+| `directions` | `"xyz"` | Active excitation directions: any combination of `"x"`, `"y"`, `"z"` |
+
+#### RSA Response Format
+
+```json
+{
+  "success": true,
+  "info": { "num_nodes": 4, "num_elements": 3, "solver": "modal+spectrum" },
+  "modal": {
+    "num_modes": 3,
+    "modes": [
+      {
+        "mode": 1,
+        "frequency_hz": 2.45,
+        "period_s": 0.408,
+        "effective_mass_y": 0.84,
+        "cumulative_eff_mass_y": 0.84,
+        "sa": 7357.0,
+        "modal_base_shear_y": 12450.0
+      }
+    ]
+  },
+  "seismic": {
+    "combination": "cqc",
+    "max_base_shear_x": 0.0,
+    "max_base_shear_y": 12510.0,
+    "max_base_shear_z": 0.0,
+    "max_displacements": [
+      {"node": 0, "ux": 0.0, "uy": 0.0},
+      {"node": 1, "ux": 8.2, "uy": 0.0}
+    ],
+    "max_abs_displacement": {"node": 1, "component": "ux", "value": 8.2}
+  },
+  "elapsed_ms": 3.1
+}
+```
+
+### POST /solve – Static Response Format
 
 ```json
 {
@@ -634,6 +771,7 @@ curl -X POST http://localhost:8080/solve \
 | `examples/dkt3_tri_plate/` | `dkt3_3d` | Nodal | Single DKT3 triangle: clamped edge, point load + UDL equiv. variants |
 | `examples/tri_plane/` | `tri3_2d`, `tri6_2d` | Nodal | Plane-stress cantilever meshed with CST/LST triangles |
 | `examples/mixed_3d_building/` | `hexa8_3d`, `elastic_beam_3d`, `truss_3d`, `shell_mitc4_3d`, `dkt3_3d` | Nodal + `body_force` | 3D building with 5 element types: concrete foundation, steel frame, truss bracing, roof shell |
+| `examples/seismic_frame_2d/` | `elastic_beam_2d` | `response_spectrum` | 2-storey steel portal frame — EC8 Type 1 spectrum, CQC, ξ=5 %, horizontal Y excitation |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 

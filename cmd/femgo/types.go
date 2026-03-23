@@ -5,7 +5,8 @@ package main
 // ---------------------------------------------------------------------------
 
 type ProblemInput struct {
-	Dimensions         string          `json:"dimensions,omitempty"` // "2D" | "3D" (optional – triggers compatibility check)
+	Dimensions         string          `json:"dimensions,omitempty"`    // "2D" | "3D" (optional – triggers compatibility check)
+	AnalysisType       string          `json:"analysis_type,omitempty"` // "" | "static" | "response_spectrum"
 	Materials          []MaterialInput `json:"materials"`
 	Nodes              [][3]float64    `json:"nodes"`
 	Elements           []ElementInput  `json:"elements"`
@@ -13,6 +14,30 @@ type ProblemInput struct {
 	Loads              []LoadInput     `json:"loads"`
 	Solver             string          `json:"solver,omitempty"`         // "cholesky" (default) | "lu" | "skyline" | "cg" | "gmres"
 	SolverOptions      SolverOptions   `json:"solver_options,omitempty"` // optional tuning for iterative/sparse solvers
+
+	// Response spectrum analysis — populated when analysis_type = "response_spectrum"
+	Modal    *ModalInput  `json:"modal,omitempty"`
+	Spectrum [][2]float64 `json:"spectrum,omitempty"` // [[T, Sa], ...] — piecewise-linear elastic spectrum
+	RSA      *RSAOptions  `json:"rsa,omitempty"`
+}
+
+// ModalInput configures the modal (eigenvalue) analysis step for RSA.
+type ModalInput struct {
+	Masses   []MassInput `json:"masses"`    // element mass definitions
+	NumModes int         `json:"num_modes"` // number of modes to extract
+}
+
+// MassInput associates a mass density with an element index.
+type MassInput struct {
+	Element int     `json:"element"` // element index (0-based)
+	Rho     float64 `json:"rho"`     // mass density (consistent units, e.g. kg/mm³)
+}
+
+// RSAOptions controls the response spectrum combination.
+type RSAOptions struct {
+	DampingRatio float64 `json:"damping_ratio,omitempty"` // uniform modal damping ξ (default 0.05)
+	Combination  string  `json:"combination,omitempty"`   // "cqc" (default) | "srss"
+	Directions   string  `json:"directions,omitempty"`    // "xyz" (default) | "x" | "y" | "z" | "xy" | "xz" | "yz"
 }
 
 // SolverOptions holds optional tuning parameters for iterative and sparse solvers.
@@ -122,6 +147,43 @@ type ProblemOutput struct {
 	ElementForces []ElementForcesOutput `json:"element_forces,omitempty"`
 	Summary       *SummaryOutput        `json:"summary,omitempty"`
 	ElapsedMs     float64               `json:"elapsed_ms,omitempty"`
+
+	// Response spectrum analysis output (only when analysis_type = "response_spectrum")
+	Modal   *ModalOutput   `json:"modal,omitempty"`
+	Seismic *SeismicOutput `json:"seismic,omitempty"`
+}
+
+// ModalOutput contains the modal analysis results echoed in the RSA response.
+type ModalOutput struct {
+	NumModes int              `json:"num_modes"`
+	Modes    []ModeInfoOutput `json:"modes"`
+}
+
+// ModeInfoOutput describes one natural mode.
+type ModeInfoOutput struct {
+	Mode                 int     `json:"mode"` // 1-based
+	FrequencyHz          float64 `json:"frequency_hz"`
+	PeriodS              float64 `json:"period_s"`
+	EffectiveMassX       float64 `json:"effective_mass_x"` // fraction 0–1
+	EffectiveMassY       float64 `json:"effective_mass_y"`
+	EffectiveMassZ       float64 `json:"effective_mass_z"`
+	CumulativeEffMassX   float64 `json:"cumulative_eff_mass_x"`
+	CumulativeEffMassY   float64 `json:"cumulative_eff_mass_y"`
+	CumulativeEffMassZ   float64 `json:"cumulative_eff_mass_z"`
+	SpectralAcceleration float64 `json:"sa"` // Sa(Tk) from spectrum
+	ModalBaseShearX      float64 `json:"modal_base_shear_x"`
+	ModalBaseShearY      float64 `json:"modal_base_shear_y"`
+	ModalBaseShearZ      float64 `json:"modal_base_shear_z"`
+}
+
+// SeismicOutput contains the CQC/SRSS combined peak seismic results.
+type SeismicOutput struct {
+	Combination        string               `json:"combination"` // "cqc" | "srss"
+	MaxBaseShearX      float64              `json:"max_base_shear_x"`
+	MaxBaseShearY      float64              `json:"max_base_shear_y"`
+	MaxBaseShearZ      float64              `json:"max_base_shear_z"`
+	MaxDisplacements   []DisplacementOutput `json:"max_displacements"` // peak envelope per node
+	MaxAbsDisplacement MaxDispOutput        `json:"max_abs_displacement"`
 }
 
 // ---------------------------------------------------------------------------

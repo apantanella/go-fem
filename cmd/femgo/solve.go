@@ -77,6 +77,10 @@ var elementCanonical = map[string]string{
 }
 
 func solveProblem(input ProblemInput) ProblemOutput {
+	anaType := strings.ToLower(strings.TrimSpace(input.AnalysisType))
+	if anaType == "response_spectrum" {
+		return solveSpectrum(input)
+	}
 	t0 := time.Now()
 
 	// --- Build materials map ---
@@ -764,4 +768,241 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 		out[i] = ef
 	}
 	return out
+}
+
+// solveSpectrum handles analysis_type = "response_spectrum".
+// It builds the domain (same as solveProblem), runs a ResponseSpectrumAnalysis,
+// and returns a ProblemOutput with Modal and Seismic sub-objects.
+func solveSpectrum(input ProblemInput) ProblemOutput {
+	t0 := time.Now()
+
+	if input.Modal == nil {
+		return errorResponse("response_spectrum: 'modal' block is required")
+	}
+	if len(input.Spectrum) < 2 {
+		return errorResponse("response_spectrum: 'spectrum' must have at least 2 points [[T,Sa],...]")
+	}
+
+	// ── Build spectrum ────────────────────────────────────────────────────
+	Ts := make([]float64, len(input.Spectrum))
+	Sas := make([]float64, len(input.Spectrum))
+	for i, pt := range input.Spectrum {
+		Ts[i] = pt[0]
+		Sas[i] = pt[1]
+	}
+	spec, err := analysis.NewSpectrum(Ts, Sas)
+	if err != nil {
+		return errorResponse("response_spectrum: %v", err)
+	}
+
+	// ── Build materials ───────────────────────────────────────────────────
+	mats := make(map[string]material.Material3D, len(input.Materials))
+	for _, mi := range input.Materials {
+		switch mi.Type {
+		case "isotropic_linear":
+			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		case "orthotropic_linear":
+			m, err2 := material.NewOrthotropicLinear(
+				mi.Ex, mi.Ey, mi.Ez,
+				mi.Nxy, mi.Nyz, mi.Nxz,
+				mi.Gxy, mi.Gyz, mi.Gxz,
+			)
+			if err2 != nil {
+				return errorResponse("material %q: %v", mi.ID, err2)
+			}
+			mats[mi.ID] = m
+		default:
+			return errorResponse("unknown material type: %s", mi.Type)
+		}
+	}
+
+	// ── Build domain ──────────────────────────────────────────────────────
+	dom := domain.NewDomain()
+	for _, n := range input.Nodes {
+		dom.AddNode(n[0], n[1], n[2])
+	}
+
+	// Dimension validation (reuse same logic).
+	declaredDim := strings.ToUpper(strings.TrimSpace(input.Dimensions))
+	if declaredDim != "" && declaredDim != "2D" && declaredDim != "3D" {
+		return errorResponse("'dimensions' must be '2D' or '3D', got %q", input.Dimensions)
+	}
+	if declaredDim != "" {
+		for eid, ei := range input.Elements {
+			edim, known := elementDimension[ei.Type]
+			if !known {
+				continue
+			}
+			if edim != declaredDim {
+				canon, ok := elementCanonical[ei.Type]
+				if !ok {
+					canon = ei.Type
+				}
+				return errorResponse("element[%d] %q is a %s element, incompatible with problem dimensions %s",
+					eid, canon, edim, declaredDim)
+			}
+		}
+	}
+
+	for eid, ei := range input.Elements {
+		elem, err2 := createElement(eid, ei, dom, mats)
+		if err2 != nil {
+			return errorResponse("element %d: %v", eid, err2)
+		}
+		dom.AddElement(elem)
+	}
+
+	// Boundary conditions.
+	for _, bc := range input.BoundaryConditions {
+		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
+			return errorResponse("BC: node %d out of range", bc.Node)
+		}
+		for i, dofIdx := range bc.DOFs {
+			if dofIdx < 0 || dofIdx > 5 {
+				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
+			}
+			val := 0.0
+			if i < len(bc.Values) {
+				val = bc.Values[i]
+			}
+			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
+		}
+	}
+
+	// ── Element masses ────────────────────────────────────────────────────
+	masses := make([]domain.ElementMass, len(input.Modal.Masses))
+	for i, m := range input.Modal.Masses {
+		if m.Element < 0 || m.Element >= len(input.Elements) {
+			return errorResponse("modal.masses[%d]: element %d out of range", i, m.Element)
+		}
+		masses[i] = domain.ElementMass{ElemIdx: m.Element, Rho: m.Rho}
+	}
+
+	// ── RSA options ───────────────────────────────────────────────────────
+	var xi float64 = 0.05
+	useSRSS := false
+	dirs := analysis.DirXYZ
+
+	if rsa := input.RSA; rsa != nil {
+		if rsa.DampingRatio > 0 {
+			xi = rsa.DampingRatio
+		}
+		if strings.EqualFold(rsa.Combination, "srss") {
+			useSRSS = true
+		}
+		if rsa.Directions != "" {
+			d := strings.ToLower(rsa.Directions)
+			dirs = 0
+			if strings.Contains(d, "x") {
+				dirs |= analysis.DirX
+			}
+			if strings.Contains(d, "y") {
+				dirs |= analysis.DirY
+			}
+			if strings.Contains(d, "z") {
+				dirs |= analysis.DirZ
+			}
+			if dirs == 0 {
+				return errorResponse("rsa.directions: must contain 'x', 'y', and/or 'z'")
+			}
+		}
+	}
+
+	numModes := input.Modal.NumModes
+	if numModes <= 0 {
+		numModes = 10
+	}
+
+	// ── Run RSA ───────────────────────────────────────────────────────────
+	rsa := &analysis.ResponseSpectrumAnalysis{
+		Dom:          dom,
+		Masses:       masses,
+		Spectrum:     spec,
+		NumModes:     numModes,
+		DampingRatio: xi,
+		UseSRSS:      useSRSS,
+		Directions:   dirs,
+	}
+	rsaRes, err := rsa.Run()
+	if err != nil {
+		return errorResponse("response_spectrum: %v", err)
+	}
+
+	// ── Build modal output ────────────────────────────────────────────────
+	mr := rsaRes.Modal
+	modesOut := make([]ModeInfoOutput, mr.NumModes)
+	for k := 0; k < mr.NumModes; k++ {
+		modesOut[k] = ModeInfoOutput{
+			Mode:                 k + 1,
+			FrequencyHz:          mr.Frequencies[k],
+			PeriodS:              mr.Periods[k],
+			EffectiveMassX:       mr.EffectiveMass[k][0],
+			EffectiveMassY:       mr.EffectiveMass[k][1],
+			EffectiveMassZ:       mr.EffectiveMass[k][2],
+			CumulativeEffMassX:   mr.CumulativeEffectiveMass[k][0],
+			CumulativeEffMassY:   mr.CumulativeEffectiveMass[k][1],
+			CumulativeEffMassZ:   mr.CumulativeEffectiveMass[k][2],
+			SpectralAcceleration: spec.SaAt(mr.Periods[k]),
+			ModalBaseShearX:      rsaRes.ModalBaseShear[k][0],
+			ModalBaseShearY:      rsaRes.ModalBaseShear[k][1],
+			ModalBaseShearZ:      rsaRes.ModalBaseShear[k][2],
+		}
+	}
+
+	// ── Build seismic displacement output ────────────────────────────────
+	dpn := dom.DOFPerNode
+	maxDisps := make([]DisplacementOutput, len(dom.Nodes))
+	var maxVal float64
+	var maxNode int
+	var maxComp string
+
+	for node, d := range rsaRes.MaxDisplacements {
+		maxDisps[node] = DisplacementOutput{
+			Node: node,
+			Ux:   d[0], Uy: d[1], Uz: d[2],
+			Rx: d[3], Ry: d[4], Rz: d[5],
+		}
+		for c := 0; c < dpn && c < 6; c++ {
+			if math.Abs(d[c]) > math.Abs(maxVal) {
+				maxVal = d[c]
+				maxNode = node
+				maxComp = dofNames[c]
+			}
+		}
+	}
+
+	combName := "cqc"
+	if useSRSS {
+		combName = "srss"
+	}
+
+	elapsed := time.Since(t0).Seconds() * 1000
+	return ProblemOutput{
+		Success: true,
+		Info: &InfoOutput{
+			NumNodes:    len(dom.Nodes),
+			NumElements: len(dom.Elements),
+			NumDOFs:     dom.NumDOF(),
+			DOFPerNode:  dpn,
+			Solver:      "modal+spectrum",
+			Dimensions:  declaredDim,
+		},
+		Modal: &ModalOutput{
+			NumModes: mr.NumModes,
+			Modes:    modesOut,
+		},
+		Seismic: &SeismicOutput{
+			Combination:      combName,
+			MaxBaseShearX:    rsaRes.MaxBaseShear[0],
+			MaxBaseShearY:    rsaRes.MaxBaseShear[1],
+			MaxBaseShearZ:    rsaRes.MaxBaseShear[2],
+			MaxDisplacements: maxDisps,
+			MaxAbsDisplacement: MaxDispOutput{
+				Node:      maxNode,
+				Component: maxComp,
+				Value:     maxVal,
+			},
+		},
+		ElapsedMs: elapsed,
+	}
 }
