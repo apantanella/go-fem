@@ -48,6 +48,9 @@ var elementDimension = map[string]string{
 	"tri6_2d": "2D", "tri6": "2D",
 	"zerolength_2d":       "2D",
 	"zerolength_frame_2d": "2D",
+	// ── Nonlinear truss elements ─────────────────────────────────────────────
+	"nl_truss_3d": "3D", "nl_truss3d": "3D",
+	"nl_truss_2d": "2D", "nl_truss2d": "2D",
 }
 
 // elementCanonical maps any element type name (including old-style aliases) to the
@@ -74,12 +77,17 @@ var elementCanonical = map[string]string{
 	"tri6": "tri6_2d", "tri6_2d": "tri6_2d",
 	"zerolength_2d":       "zerolength_2d",
 	"zerolength_frame_2d": "zerolength_frame_2d",
+	"nl_truss3d":          "nl_truss_3d", "nl_truss_3d": "nl_truss_3d",
+	"nl_truss2d": "nl_truss_2d", "nl_truss_2d": "nl_truss_2d",
 }
 
 func solveProblem(input ProblemInput) ProblemOutput {
 	anaType := strings.ToLower(strings.TrimSpace(input.AnalysisType))
 	if anaType == "response_spectrum" {
 		return solveSpectrum(input)
+	}
+	if anaType == "nonlinear_static" || anaType == "nonlinear" {
+		return solveNonlinear(input)
 	}
 	t0 := time.Now()
 
@@ -699,6 +707,16 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			sigma := e.AxialStress()
 			ef.N = &N
 			ef.Sigma = &sigma
+		case *truss.NLTruss3D:
+			N := e.AxialForce()
+			sigma := e.AxialStress()
+			ef.N = &N
+			ef.Sigma = &sigma
+		case *truss.NLTruss2D:
+			N := e.AxialForce()
+			sigma := e.AxialStress()
+			ef.N = &N
+			ef.Sigma = &sigma
 		case *frame.ElasticBeam3D:
 			ef2 := e.EndForces()
 			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
@@ -1002,6 +1020,275 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 				Component: maxComp,
 				Value:     maxVal,
 			},
+		},
+		ElapsedMs: elapsed,
+	}
+}
+
+// createElementNL builds any element type, routing nl_truss_3d / nl_truss_2d
+// to their UniaxialMaterial constructors and all other types to createElement.
+func createElementNL(eid int, ei ElementInput, dom *domain.Domain, mats map[string]material.Material3D, matsUni map[string]material.UniaxialMaterial) (element.Element, error) {
+	nn := len(dom.Nodes)
+
+	resolveUni := func(id string) (material.UniaxialMaterial, error) {
+		m, ok := matsUni[id]
+		if !ok {
+			return nil, fmt.Errorf("unknown UniaxialMaterial %q – declare it as steel_bilinear or concrete_pararect", id)
+		}
+		return m, nil
+	}
+
+	validateNodes := func(nids []int, need int) error {
+		if len(nids) != need {
+			return fmt.Errorf("%s requires %d nodes, got %d", ei.Type, need, len(nids))
+		}
+		for _, nid := range nids {
+			if nid < 0 || nid >= nn {
+				return fmt.Errorf("node %d out of range", nid)
+			}
+		}
+		return nil
+	}
+
+	switch ei.Type {
+	case "nl_truss_3d", "nl_truss3d":
+		if err := validateNodes(ei.Nodes, 2); err != nil {
+			return nil, err
+		}
+		if ei.A <= 0 {
+			return nil, fmt.Errorf("nl_truss_3d: A must be > 0")
+		}
+		m, err := resolveUni(ei.Material)
+		if err != nil {
+			return nil, fmt.Errorf("nl_truss_3d: %w", err)
+		}
+		var n2 [2]int
+		var c2 [2][3]float64
+		copy(n2[:], ei.Nodes)
+		for k, nid := range ei.Nodes {
+			c2[k] = dom.Nodes[nid].Coord
+		}
+		return truss.NewNLTruss3D(eid, n2, c2, ei.A, m), nil
+
+	case "nl_truss_2d", "nl_truss2d":
+		if err := validateNodes(ei.Nodes, 2); err != nil {
+			return nil, err
+		}
+		if ei.A <= 0 {
+			return nil, fmt.Errorf("nl_truss_2d: A must be > 0")
+		}
+		m, err := resolveUni(ei.Material)
+		if err != nil {
+			return nil, fmt.Errorf("nl_truss_2d: %w", err)
+		}
+		var n2 [2]int
+		var c2 [2][2]float64
+		copy(n2[:], ei.Nodes)
+		for k, nid := range ei.Nodes {
+			c2[k][0] = dom.Nodes[nid].Coord[0]
+			c2[k][1] = dom.Nodes[nid].Coord[1]
+		}
+		return truss.NewNLTruss2D(eid, n2, c2, ei.A, m), nil
+
+	default:
+		return createElement(eid, ei, dom, mats)
+	}
+}
+
+// solveNonlinear handles analysis_type = "nonlinear_static" | "nonlinear".
+// It supports nonlinear material models (steel_bilinear, concrete_pararect)
+// via the Newton-Raphson StaticNonlinearAnalysis.
+func solveNonlinear(input ProblemInput) ProblemOutput {
+	t0 := time.Now()
+
+	// ── Build Material3D map (for solid/shell elements) ──────────────────
+	mats := make(map[string]material.Material3D, len(input.Materials))
+	// ── Build UniaxialMaterial map (for nl_truss elements) ───────────────
+	matsUni := make(map[string]material.UniaxialMaterial)
+
+	for _, mi := range input.Materials {
+		switch mi.Type {
+		case "isotropic_linear":
+			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		case "orthotropic_linear":
+			m, err := material.NewOrthotropicLinear(
+				mi.Ex, mi.Ey, mi.Ez,
+				mi.Nxy, mi.Nyz, mi.Nxz,
+				mi.Gxy, mi.Gyz, mi.Gxz,
+			)
+			if err != nil {
+				return errorResponse("material %q: %v", mi.ID, err)
+			}
+			mats[mi.ID] = m
+		case "steel_bilinear":
+			m, err := material.NewSteelBilinear(mi.E, mi.Fy, mi.Esh)
+			if err != nil {
+				return errorResponse("material %q (steel_bilinear): %v", mi.ID, err)
+			}
+			matsUni[mi.ID] = m
+		case "concrete_pararect":
+			m, err := material.NewConcretePararect(mi.Fc, mi.EpsC1, mi.EpsCU, 0)
+			if err != nil {
+				return errorResponse("material %q (concrete_pararect): %v", mi.ID, err)
+			}
+			matsUni[mi.ID] = m
+		default:
+			return errorResponse("unknown material type: %s", mi.Type)
+		}
+	}
+
+	// ── Build domain ─────────────────────────────────────────────────────
+	dom := domain.NewDomain()
+	for _, n := range input.Nodes {
+		dom.AddNode(n[0], n[1], n[2])
+	}
+
+	// Dimension check (same logic as solveProblem)
+	declaredDim := strings.ToUpper(strings.TrimSpace(input.Dimensions))
+	if declaredDim != "" {
+		if declaredDim != "2D" && declaredDim != "3D" {
+			return errorResponse("'dimensions' must be '2D' or '3D', got %q", input.Dimensions)
+		}
+		for eid, ei := range input.Elements {
+			edim, known := elementDimension[ei.Type]
+			if !known {
+				continue
+			}
+			if edim != declaredDim {
+				canon, ok := elementCanonical[ei.Type]
+				if !ok {
+					canon = ei.Type
+				}
+				return errorResponse("element[%d] %q is a %s element, incompatible with problem dimensions %s",
+					eid, canon, edim, declaredDim)
+			}
+		}
+	}
+
+	for eid, ei := range input.Elements {
+		elem, err := createElementNL(eid, ei, dom, mats, matsUni)
+		if err != nil {
+			return errorResponse("element %d: %v", eid, err)
+		}
+		dom.AddElement(elem)
+	}
+
+	// ── Boundary conditions ──────────────────────────────────────────────
+	for _, bc := range input.BoundaryConditions {
+		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
+			return errorResponse("BC: node %d out of range", bc.Node)
+		}
+		for i, dofIdx := range bc.DOFs {
+			if dofIdx < 0 || dofIdx > 5 {
+				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
+			}
+			val := 0.0
+			if i < len(bc.Values) {
+				val = bc.Values[i]
+			}
+			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
+		}
+	}
+
+	// ── Loads ────────────────────────────────────────────────────────────
+	for i, ld := range input.Loads {
+		switch ld.Type {
+		case "", "nodal":
+			if ld.Node < 0 || ld.Node >= len(dom.Nodes) {
+				return errorResponse("load[%d]: node %d out of range", i, ld.Node)
+			}
+			if ld.DOF < 0 || ld.DOF > 5 {
+				return errorResponse("load[%d]: invalid dof %d", i, ld.DOF)
+			}
+			dom.ApplyLoad(ld.Node, ld.DOF, ld.Value)
+		case "body_force":
+			if ld.Element < 0 || ld.Element >= len(dom.Elements) {
+				return errorResponse("load[%d] body_force: element %d out of range", i, ld.Element)
+			}
+			dom.AddBodyForce(ld.Element, ld.Rho, ld.G)
+		default:
+			return errorResponse("load[%d]: load type %q is not supported in nonlinear analysis", i, ld.Type)
+		}
+	}
+
+	// ── NR options ───────────────────────────────────────────────────────
+	maxIter := 50
+	tolNR := 1e-6
+	if opts := input.NLOptions; opts != nil {
+		if opts.MaxIter > 0 {
+			maxIter = opts.MaxIter
+		}
+		if opts.Tol > 0 {
+			tolNR = opts.Tol
+		}
+	}
+
+	ana := analysis.StaticNonlinearAnalysis{
+		Dom:     dom,
+		Solver:  solver.LU{},
+		MaxIter: maxIter,
+		Tol:     tolNR,
+	}
+	result, err := ana.Run()
+	if err != nil {
+		return errorResponse("nonlinear analysis: %v", err)
+	}
+
+	disp := dom.SetDisplacements(result.U)
+	dpn := dom.DOFPerNode
+
+	// ── Build displacement output ─────────────────────────────────────────
+	disps := make([]DisplacementOutput, len(disp))
+	var maxVal float64
+	var maxNode int
+	var maxComp string
+	for i, d := range disp {
+		disps[i] = DisplacementOutput{
+			Node: i,
+			Ux:   d[0], Uy: d[1], Uz: d[2],
+			Rx: d[3], Ry: d[4], Rz: d[5],
+		}
+		for c := 0; c < 6; c++ {
+			if math.Abs(d[c]) > math.Abs(maxVal) {
+				maxVal = d[c]
+				maxNode = i
+				maxComp = dofNames[c]
+			}
+		}
+	}
+
+	// ── NL convergence output ────────────────────────────────────────────
+	var finalRes float64
+	if len(result.ResidualHistory) > 0 {
+		finalRes = result.ResidualHistory[len(result.ResidualHistory)-1]
+	}
+
+	elapsed := time.Since(t0).Seconds() * 1000
+
+	return ProblemOutput{
+		Success: true,
+		Info: &InfoOutput{
+			NumNodes:    len(dom.Nodes),
+			NumElements: len(dom.Elements),
+			NumDOFs:     dom.NumDOF(),
+			DOFPerNode:  dpn,
+			Solver:      "lu (newton-raphson)",
+			Dimensions:  declaredDim,
+		},
+		Displacements: disps,
+		ElementForces: extractElementForces(dom.Elements, input.Elements),
+		Summary: &SummaryOutput{
+			MaxAbsDisplacement: MaxDispOutput{
+				Node:      maxNode,
+				Component: maxComp,
+				Value:     maxVal,
+			},
+		},
+		NLResult: &NLOutput{
+			Converged:       result.Converged,
+			Iterations:      result.Iterations,
+			FinalResidual:   finalRes,
+			ResidualHistory: result.ResidualHistory,
 		},
 		ElapsedMs: elapsed,
 	}

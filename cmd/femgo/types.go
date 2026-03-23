@@ -6,7 +6,7 @@ package main
 
 type ProblemInput struct {
 	Dimensions         string          `json:"dimensions,omitempty"`    // "2D" | "3D" (optional – triggers compatibility check)
-	AnalysisType       string          `json:"analysis_type,omitempty"` // "" | "static" | "response_spectrum"
+	AnalysisType       string          `json:"analysis_type,omitempty"` // "" | "static" | "response_spectrum" | "nonlinear_static"
 	Materials          []MaterialInput `json:"materials"`
 	Nodes              [][3]float64    `json:"nodes"`
 	Elements           []ElementInput  `json:"elements"`
@@ -19,6 +19,15 @@ type ProblemInput struct {
 	Modal    *ModalInput  `json:"modal,omitempty"`
 	Spectrum [][2]float64 `json:"spectrum,omitempty"` // [[T, Sa], ...] — piecewise-linear elastic spectrum
 	RSA      *RSAOptions  `json:"rsa,omitempty"`
+
+	// Nonlinear static analysis — populated when analysis_type = "nonlinear_static"
+	NLOptions *NLOptions `json:"nl_options,omitempty"`
+}
+
+// NLOptions configures the Newton-Raphson nonlinear static solver.
+type NLOptions struct {
+	MaxIter int     `json:"max_iter,omitempty"` // NR max iterations (default 50)
+	Tol     float64 `json:"tol,omitempty"`      // relative residual tolerance (default 1e-6)
 }
 
 // ModalInput configures the modal (eigenvalue) analysis step for RSA.
@@ -51,9 +60,9 @@ type SolverOptions struct {
 
 type MaterialInput struct {
 	ID   string `json:"id"`
-	Type string `json:"type"` // "isotropic_linear" | "orthotropic_linear"
+	Type string `json:"type"` // "isotropic_linear" | "orthotropic_linear" | "steel_bilinear" | "concrete_pararect"
 
-	// Isotropic parameters
+	// Isotropic / beam parameters
 	E  float64 `json:"E,omitempty"`
 	Nu float64 `json:"nu,omitempty"`
 
@@ -67,6 +76,15 @@ type MaterialInput struct {
 	Gxy float64 `json:"Gxy,omitempty"`
 	Gyz float64 `json:"Gyz,omitempty"`
 	Gxz float64 `json:"Gxz,omitempty"`
+
+	// steel_bilinear parameters
+	Fy  float64 `json:"fy,omitempty"`  // yield stress (MPa, positive)
+	Esh float64 `json:"Esh,omitempty"` // hardening modulus (MPa, 0 = elastic-perfectly plastic)
+
+	// concrete_pararect parameters (EN 1992-1-1 parabola-rectangle)
+	Fc    float64 `json:"fc,omitempty"`     // compressive strength (MPa, positive value)
+	EpsC1 float64 `json:"eps_c1,omitempty"` // strain at peak (default 0.0020)
+	EpsCU float64 `json:"eps_cu,omitempty"` // ultimate strain  (default 0.0035)
 }
 
 type ElementInput struct {
@@ -151,6 +169,17 @@ type ProblemOutput struct {
 	// Response spectrum analysis output (only when analysis_type = "response_spectrum")
 	Modal   *ModalOutput   `json:"modal,omitempty"`
 	Seismic *SeismicOutput `json:"seismic,omitempty"`
+
+	// Nonlinear static analysis output (only when analysis_type = "nonlinear_static")
+	NLResult *NLOutput `json:"nl_result,omitempty"`
+}
+
+// NLOutput reports the convergence details of the Newton-Raphson analysis.
+type NLOutput struct {
+	Converged       bool      `json:"converged"`
+	Iterations      int       `json:"iterations"`
+	FinalResidual   float64   `json:"final_residual"`
+	ResidualHistory []float64 `json:"residual_history"`
 }
 
 // ModalOutput contains the modal analysis results echoed in the RSA response.

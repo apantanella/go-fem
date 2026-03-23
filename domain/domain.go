@@ -437,3 +437,90 @@ func (d *Domain) ElementDisp(elem element.Element, U *mat.VecDense) []float64 {
 	}
 	return disp
 }
+
+// DOFOffset returns the consecutive offset (0-based within the node's DOF block)
+// for the given DOF type enum value (0=UX..5=RZ).
+// Returns -1 if the DOF type is inactive in this model.
+// Must be called after Assemble() has been invoked.
+func (d *Domain) DOFOffset(dofEnum int) int {
+	if dofEnum < 0 || dofEnum >= 6 {
+		return -1
+	}
+	return d.dofOffset[dofEnum]
+}
+
+// AssembleTangent reassembles the global tangent stiffness matrix K_T from the
+// current element tangent stiffnesses (after elements have been Updated).
+// Must be called after Assemble() has set DOFPerNode and dofOffset.
+// Loads and BCs are NOT applied; call ApplyBCsIncremental to enforce constraints.
+func (d *Domain) AssembleTangent() *mat.Dense {
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
+	K := mat.NewDense(ndof, ndof, nil)
+	for _, elem := range d.Elements {
+		ke := elem.GetTangentStiffness()
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		eldof := elem.NumDOF()
+		elemDPN := elem.DOFPerNode()
+		gDOFs := make([]int, eldof)
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			gDOFs[i] = nids[nodeIdx]*dpn + d.dofOffset[int(dt)]
+		}
+		for i := 0; i < eldof; i++ {
+			for j := 0; j < eldof; j++ {
+				K.Set(gDOFs[i], gDOFs[j], K.At(gDOFs[i], gDOFs[j])+ke.At(i, j))
+			}
+		}
+	}
+	return K
+}
+
+// AssembleResisting assembles the global internal resisting force vector R_int
+// from element resisting forces. Must be called after elements have been Updated.
+func (d *Domain) AssembleResisting() *mat.VecDense {
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
+	Rint := mat.NewVecDense(ndof, nil)
+	for _, elem := range d.Elements {
+		fe := elem.GetResistingForce()
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		elemDPN := elem.DOFPerNode()
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			gdof := nids[nodeIdx]*dpn + d.dofOffset[int(dt)]
+			Rint.SetVec(gdof, Rint.AtVec(gdof)+fe.AtVec(i))
+		}
+	}
+	return Rint
+}
+
+// ApplyBCsIncremental modifies K_T and R for the Newton-Raphson incremental
+// system K_T · ΔU = R:
+//   - For each constrained DOF gdof: K_T[gdof,*] = 0, K_T[*,gdof] = 0,
+//     K_T[gdof,gdof] = 1, R[gdof] = 0
+//
+// This enforces ΔU[gdof] = 0 so that prescribed displacements do not change
+// between NR iterations.
+func (d *Domain) ApplyBCsIncremental(K *mat.Dense, R *mat.VecDense) {
+	dpn := d.DOFPerNode
+	ndof := len(d.Nodes) * dpn
+	for _, bc := range d.BCs {
+		off := d.dofOffset[bc.DOF]
+		if off < 0 {
+			continue
+		}
+		gdof := bc.NodeID*dpn + off
+		if gdof >= ndof {
+			continue
+		}
+		for j := 0; j < ndof; j++ {
+			K.Set(gdof, j, 0)
+			K.Set(j, gdof, 0)
+		}
+		K.Set(gdof, gdof, 1)
+		R.SetVec(gdof, 0)
+	}
+}
