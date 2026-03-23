@@ -51,6 +51,10 @@ var elementDimension = map[string]string{
 	// ── Nonlinear truss elements ─────────────────────────────────────────────
 	"nl_truss_3d": "3D", "nl_truss3d": "3D",
 	"nl_truss_2d": "2D", "nl_truss2d": "2D",
+	// ── Winkler foundation elements ───────────────────────────────────────────
+	"winkler_beam_2d": "2D", "winkler_beam2d": "2D",
+	"winkler_beam_3d": "3D", "winkler_beam3d": "3D",
+	"winkler_shell_mitc4": "3D", "winkler_shell_mitc4_3d": "3D",
 }
 
 // elementCanonical maps any element type name (including old-style aliases) to the
@@ -79,6 +83,9 @@ var elementCanonical = map[string]string{
 	"zerolength_frame_2d": "zerolength_frame_2d",
 	"nl_truss3d":          "nl_truss_3d", "nl_truss_3d": "nl_truss_3d",
 	"nl_truss2d": "nl_truss_2d", "nl_truss_2d": "nl_truss_2d",
+	"winkler_beam2d": "winkler_beam_2d", "winkler_beam_2d": "winkler_beam_2d",
+	"winkler_beam3d": "winkler_beam_3d", "winkler_beam_3d": "winkler_beam_3d",
+	"winkler_shell_mitc4": "winkler_shell_mitc4_3d", "winkler_shell_mitc4_3d": "winkler_shell_mitc4_3d",
 }
 
 func solveProblem(input ProblemInput) ProblemOutput {
@@ -666,6 +673,59 @@ func createElement(eid int, ei ElementInput, dom *domain.Domain, mats map[string
 		copy(s3[:], ei.Springs[:3])
 		return zerolength.NewZeroLength2DFrame(eid, n2, s3), nil
 
+	case "winkler_beam2d", "winkler_beam_2d":
+		nids, coords, err := getCoords2(ei.Nodes, 2)
+		if err != nil {
+			return nil, err
+		}
+		if ei.E <= 0 || ei.A <= 0 {
+			return nil, fmt.Errorf("winkler_beam_2d requires E, A > 0")
+		}
+		var n2b [2]int
+		var c2b [2][2]float64
+		copy(n2b[:], nids)
+		copy(c2b[:], coords)
+		sec2d := section.BeamSection2D{A: ei.A, Iz: ei.Iz}
+		ks := ei.Ks
+		if ei.Ksy > 0 {
+			ks = ei.Ksy // Ksy alias for Y-direction (2D beam, only Y springs)
+		}
+		return frame.NewWinklerBeam2D(eid, n2b, c2b, ei.E, sec2d, ks, ei.Width)
+
+	case "winkler_beam3d", "winkler_beam_3d":
+		nids, coords, err := getCoords3(ei.Nodes, 2)
+		if err != nil {
+			return nil, err
+		}
+		if ei.E <= 0 || ei.A <= 0 {
+			return nil, fmt.Errorf("winkler_beam_3d requires E, A > 0")
+		}
+		var n2b [2]int
+		var c2b [2][3]float64
+		copy(n2b[:], nids)
+		copy(c2b[:], coords)
+		sec3d := section.BeamSection3D{A: ei.A, Iy: ei.Iy, Iz: ei.Iz, J: ei.J}
+		ksy, ksz := ei.Ksy, ei.Ksz
+		if ei.Ks > 0 && ksy == 0 && ksz == 0 {
+			ksy = ei.Ks // fallback: Ks used as uniform spring in both transverse dirs
+			ksz = ei.Ks
+		}
+		return frame.NewWinklerBeam3D(eid, n2b, c2b, ei.E, ei.G, sec3d, ei.VecXZ, ksy, ksz, ei.Width)
+
+	case "winkler_shell_mitc4", "winkler_shell_mitc4_3d":
+		nids, coords, err := getCoords3(ei.Nodes, 4)
+		if err != nil {
+			return nil, err
+		}
+		if ei.E <= 0 || ei.Thickness <= 0 {
+			return nil, fmt.Errorf("winkler_shell_mitc4 requires E > 0 and thickness > 0")
+		}
+		var n4 [4]int
+		var c4 [4][3]float64
+		copy(n4[:], nids)
+		copy(c4[:], coords)
+		return shell.NewWinklerShellMITC4(eid, n4, c4, ei.E, ei.Nu, ei.Thickness, ei.Ks), nil
+
 	default:
 		return nil, fmt.Errorf("unknown element type: %s", ei.Type)
 	}
@@ -725,6 +785,14 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			ef2 := e.EndForces()
 			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
 			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Vz: ef2.J[2], Mx: ef2.J[3], My: ef2.J[4], Mz: ef2.J[5]}
+		case *frame.WinklerBeam3D:
+			ef2 := e.EndForces()
+			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Vz: ef2.I[2], Mx: ef2.I[3], My: ef2.I[4], Mz: ef2.I[5]}
+			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Vz: ef2.J[2], Mx: ef2.J[3], My: ef2.J[4], Mz: ef2.J[5]}
+		case *frame.WinklerBeam2D:
+			ef2 := e.EndForces()
+			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Mz: ef2.I[2]}
+			ef.EndJ = &BeamEndOutput{N: ef2.J[0], Vy: ef2.J[1], Mz: ef2.J[2]}
 		case *frame.ElasticBeam2D:
 			ef2 := e.EndForces()
 			ef.EndI = &BeamEndOutput{N: ef2.I[0], Vy: ef2.I[1], Mz: ef2.I[2]}
@@ -761,6 +829,9 @@ func extractElementForces(elems []element.Element, inputs []ElementInput) []Elem
 			s := e.StressCentroid()
 			vm := solid.VonMises([6]float64{s[0], s[1], 0, s[2], 0, 0})
 			ef.Stress = &StressOutput{Sxx: s[0], Syy: s[1], Txy: s[2], VonMises: vm}
+		case *shell.WinklerShellMITC4:
+			sf := e.LocalForces()
+			ef.ShellForces = &ShellForcesOutput{Nx: sf.Nx, Ny: sf.Ny, Nxy: sf.Nxy, Mx: sf.Mx, My: sf.My, Mxy: sf.Mxy}
 		case *shell.ShellMITC4:
 			sf := e.LocalForces()
 			ef.ShellForces = &ShellForcesOutput{Nx: sf.Nx, Ny: sf.Ny, Nxy: sf.Nxy, Mx: sf.Mx, My: sf.My, Mxy: sf.Mxy}

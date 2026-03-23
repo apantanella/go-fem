@@ -111,6 +111,15 @@ type ElementInput struct {
 	Thickness float64 `json:"thickness,omitempty"`  // Shell/plate thickness
 	PlaneType string  `json:"plane_type,omitempty"` // "stress" | "strain"
 
+	// Winkler foundation parameters (winkler_beam_2d, winkler_beam_3d, winkler_shell_mitc4)
+	// Ks: subgrade reaction modulus in local Y direction [N/mm³] (also used as Z for winkler_beam_2d and shell)
+	// Ksy, Ksz: independent moduli for local Y and Z (winkler_beam_3d)
+	// Width: effective foundation width B [mm] (default 1 if omitted)
+	Ks    float64 `json:"Ks,omitempty"`    // Winkler modulus [N/mm³]
+	Ksy   float64 `json:"Ksy,omitempty"`   // Winkler modulus local Y [N/mm³]
+	Ksz   float64 `json:"Ksz,omitempty"`   // Winkler modulus local Z [N/mm³]
+	Width float64 `json:"width,omitempty"` // effective foundation width B [mm]
+
 	// ZeroLength parameters
 	Springs [6]float64 `json:"springs,omitempty"` // Spring stiffnesses [kUX..kRZ]
 }
