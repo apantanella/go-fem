@@ -1,5 +1,7 @@
 # go-fem
 
+> ⚠️ **Work in progress — validation ongoing.** Results have not yet been systematically verified against independent reference solutions. **Do not use in production or for real structural engineering designs.**
+
 A 3D structural **Finite Element Method** library and HTTP API server written in pure Go, inspired by the modular architecture of [OpenSees](https://opensees.berkeley.edu/).
 
 ## Overview
@@ -7,12 +9,14 @@ A 3D structural **Finite Element Method** library and HTTP API server written in
 `go-fem` solves linear static and dynamic structural problems via a layered architecture that mirrors OpenSees: materials → elements → domain → analysis. Problems are defined programmatically through the Go API or submitted as JSON to the built-in HTTP server.
 
 **Key capabilities:**
-- 2D and 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, and spring/connector elements
-- Isotropic and orthotropic linear elastic materials
+- 2D and 3D solid, truss, frame (Euler-Bernoulli and Timoshenko), shell, spring/connector, and **Winkler elastic foundation** elements
+- Isotropic and orthotropic linear elastic materials; uniaxial nonlinear materials (`SteelBilinear`, `ConcretePararect`)
+- **Nonlinear static analysis** (Newton-Raphson) with consistent tangent and Arc-Length-ready residual interface
 - Automatic DOF detection (2, 3, or 6 per node) based on element types
 - DOF-type-aware global stiffness assembly
 - Five linear solvers: `Cholesky` (dense SPD), `LU` (dense general), `SkylineLDL` (sparse banded), `CG` (iterative SPD), `GMRES` (iterative general/non-symmetric)
 - **Modal (free-vibration) analysis**: natural frequencies, mode shapes, participation factors, effective mass ratios — via generalized eigenvalue problem K·φ = ω²·M·φ
+- **Response spectrum analysis** (CQC / SRSS) — multi-mode seismic combination per EC8 / NTC
 - Consistent mass matrices for all element types (truss, frame, solid, shell)
 - Multiple load types: nodal forces, surface pressure, beam UDL, body force/gravity
 - Non-zero prescribed displacements (imposed settlement)
@@ -52,6 +56,10 @@ All materials implement `material.Material3D`, which exposes a 6×6 constitutive
 |------|--------------|------------|-------------|
 | `IsotropicLinear` | `"isotropic_linear"` | `E`, `ν` | 3D linear elastic isotropic |
 | `OrthotropicLinear` | `"orthotropic_linear"` | `Ex/Ey/Ez`, `νxy/νyz/νxz`, `Gxy/Gyz/Gxz` | 3D linear elastic orthotropic (9 constants) |
+| `SteelBilinear` | `"steel_bilinear"` | `E`, `fy`, `Esh` | Uniaxial bilinear kinematic hardening (return-mapping, Simo) |
+| `ConcretePararect` | `"concrete_pararect"` | `E`, `fc`, `eps_c1`, `eps_cu` | Uniaxial parabola-rectangle EN 1992-1-1 §3.1.7 |
+
+Uniaxial nonlinear materials implement the `UniaxialMaterial` interface and are used by nonlinear truss elements (`nl_truss_3d`, `nl_truss_2d`) together with `StaticNonlinearAnalysis`.
 
 ```go
 // Isotropic
@@ -120,15 +128,20 @@ type MassMatrixAssembler interface {
 | `element/truss/` | `Truss3D` | 2 | 6 | Analytical | 3D bar element, axial only (3 DOF/node) |
 | `element/truss/` | `Truss2D` | 2 | 4 | Analytical | 2D bar element, axial only (2 DOF/node: UX, UY) |
 | `element/truss/` | `CorotTruss` | 2 | 6 | Corotational | Geometrically nonlinear truss |
+| `element/truss/` | `NLTruss3D` | 2 | 6 | Analytical | 3D nonlinear truss with `UniaxialMaterial` |
+| `element/truss/` | `NLTruss2D` | 2 | 4 | Analytical | 2D nonlinear truss with `UniaxialMaterial` |
 | `element/frame/` | `ElasticBeam3D` | 2 | 12 | Analytical | Euler-Bernoulli 3D beam (6 DOF/node) |
 | `element/frame/` | `ElasticBeam2D` | 2 | 6 | Analytical | Euler-Bernoulli 2D beam for plane frames (3 DOF/node: UX, UY, RZ) |
 | `element/frame/` | `TimoshenkoBeam3D` | 2 | 12 | Analytical | Timoshenko 3D beam — shear-deformable (6 DOF/node) |
 | `element/frame/` | `TimoshenkoBeam2D` | 2 | 6 | Analytical | Timoshenko 2D beam — shear-deformable for plane frames (3 DOF/node) |
+| `element/frame/` | `WinklerBeam3D` | 2 | 12 | Analytical | Euler-Bernoulli 3D beam on Winkler foundation (independent Ksy, Ksz) |
+| `element/frame/` | `WinklerBeam2D` | 2 | 6 | Analytical | Euler-Bernoulli 2D beam on Winkler foundation (consistent Hermite matrix) |
 | `element/quad/` | `Quad4` | 4 | 8 | 2×2 Gauss | Plane stress or plane strain |
 | `element/quad/` | `Quad8` | 8 | 16 | 3×3 Gauss | Serendipity 8-node quad, plane stress or strain — accurate near stress concentrations |
 | `element/quad/` | `Tri3` | 3 | 6 | Exact (constant B) | CST — constant strain triangle, plane stress/strain |
 | `element/quad/` | `Tri6` | 6 | 12 | 3-pt triangle | LST — linear strain triangle, plane stress/strain |
 | `element/shell/` | `ShellMITC4` | 4 | 24 | 2×2 + SRI | Flat shell: membrane + bending, 6 DOF/node |
+| `element/shell/` | `WinklerShellMITC4` | 4 | 24 | 2×2 + SRI | MITC4 shell on Winkler foundation — adds `Ks·∫N·Nᵀ dA` to UZ DOFs |
 | `element/shell/` | `DiscreteKirchhoffTriangle` (`DKT3`) | 3 | 18 | Area-constant | Thin plate bending (Discrete Kirchhoff), active DOFs: UZ/RX/RY per node |
 
 ### Connector Elements
@@ -223,6 +236,42 @@ Elements implement optional load interfaces:
 ---
 
 ## Layer 4 – Analysis & Solvers
+
+### StaticNonlinearAnalysis
+
+Incremental Newton-Raphson nonlinear static analysis — uses `UniaxialMaterial` elements (`NLTruss3D`, `NLTruss2D`) whose internal state evolves with strain:
+
+```go
+ana := &analysis.StaticNonlinearAnalysis{
+    Dom:     dom,
+    Solver:  solver.LU{},
+    MaxIter: 50,
+    Tol:     1e-6, // relative residual ‖R‖/‖F‖
+}
+res, err := ana.Run()
+
+res.Converged       // bool
+res.Iterations      // int
+res.FinalResidual   // float64
+res.ResidualHistory // []float64 — per iteration
+```
+
+Call via HTTP API setting `"analysis_type": "nonlinear_static"` with an `"nl_options"` block. Nonlinear elements coexist freely with linear elements in the same domain.
+
+```json
+{
+  "analysis_type": "nonlinear_static",
+  "nl_options": {"max_iter": 100, "tol": 1e-7},
+  "materials": [
+    {"id": "S355", "type": "steel_bilinear", "E": 210000, "fy": 355, "Esh": 0}
+  ],
+  "elements": [
+    {"type": "nl_truss_3d", "nodes": [0,1], "E": 210000, "A": 500, "material": "S355"}
+  ]
+}
+```
+
+---
 
 ### StaticLinearAnalysis
 
@@ -645,6 +694,8 @@ Example `spring_forces` for a `zerolength_frame_2d` (UX + UY + RZ springs):
 |----------|----------------|-------------|
 | `"isotropic_linear"` | `E`, `nu` | Isotropic linear elastic |
 | `"orthotropic_linear"` | `Ex`, `Ey`, `Ez`, `nxy`, `nyz`, `nxz`, `Gxy`, `Gyz`, `Gxz` | Orthotropic linear elastic (9 constants) |
+| `"steel_bilinear"` | `E`, `fy`, `Esh` | Uniaxial bilinear steel — `Esh=0` = elastic-perfectly plastic |
+| `"concrete_pararect"` | `E`, `fc`, `eps_c1` *(opt)*, `eps_cu` *(opt)* | EN 1992-1-1 §3.1.7 parabola-rectangle |
 
 ```json
 {"id": "timber", "type": "orthotropic_linear",
@@ -680,6 +731,11 @@ All types use an explicit `_2d` or `_3d` suffix. The bare names (e.g. `"tet4"`, 
 | `"zerolength_trans_3d"` | — | 2 | `springs[0..2]`: [kUX,kUY,kUZ] | 3 DOF/node, translational only |
 | `"zerolength_2d"` | — | 2 | `springs[0..1]`: [kUX,kUY] | 2 DOF/node, 2D translational |
 | `"zerolength_frame_2d"` | — | 2 | `springs[0..2]`: [kUX,kUY,kRZ] | 3 DOF/node, 2D plane-frame |
+| `"nl_truss_3d"` | `"nl_truss3d"` | 2 | `E`, `A`, `material` | 3D nonlinear truss — requires `UniaxialMaterial` reference |
+| `"nl_truss_2d"` | `"nl_truss2d"` | 2 | `E`, `A`, `material` | 2D nonlinear truss — requires `UniaxialMaterial` reference |
+| `"winkler_beam_2d"` | `"winkler_beam2d"` | 2 | `E`, `A`, `Iz`, `Ks`, `width` *(opt)* | 2D beam on Winkler foundation (consistent Hermite spring matrix) |
+| `"winkler_beam_3d"` | `"winkler_beam3d"` | 2 | `E`, `G`, `A`, `Iy`, `Iz`, `J`, `Ksy`, `Ksz`, `width` *(opt)* | 3D beam on Winkler foundation — independent Y and Z springs |
+| `"winkler_shell_mitc4"` | — | 4 | `E`, `nu`, `thickness`, `Ks` | MITC4 shell plate (platea) on Winkler foundation |
 
 Solid elements require a `"material"` string referencing an entry in `"materials"`. All other elements take direct `E`, `G`, etc. parameters.
 
@@ -772,6 +828,8 @@ curl -X POST http://localhost:8080/solve \
 | `examples/tri_plane/` | `tri3_2d`, `tri6_2d` | Nodal | Plane-stress cantilever meshed with CST/LST triangles |
 | `examples/mixed_3d_building/` | `hexa8_3d`, `elastic_beam_3d`, `truss_3d`, `shell_mitc4_3d`, `dkt3_3d` | Nodal + `body_force` | 3D building with 5 element types: concrete foundation, steel frame, truss bracing, roof shell |
 | `examples/seismic_frame_2d/` | `elastic_beam_2d` | `response_spectrum` | 2-storey steel portal frame — EC8 Type 1 spectrum, CQC, ξ=5 %, horizontal Y excitation |
+| `examples/nl_yielding_truss/` | `nl_truss_3d` | Nodal | Hyperstatic 3-bar truss, S355 + S235 EPP steel, P=250 kN — first bar yields, load redistribution, converges in 4 NR iterations |
+| `examples/winkler_foundation/` | `winkler_beam_2d` | Nodal | 6 m RC strip footing, two 600 kN column loads, ks=0.04 N/mm³ — differential settlement between load points and free ends |
 
 Each example directory contains a `problem.json` ready to POST to `/solve` and, where applicable, a `main.go` for programmatic use.
 
@@ -893,7 +951,7 @@ go test ./solver/...
 | `TestFrequencyHz` | Conversion f = √ω²/(2π): exact values at ω²=4π² (1 Hz) and ω²=π² (0.5 Hz); zero-frequency guard (ω²=0→0 Hz); negative-ω² guard (→0 Hz, prevents NaN) |
 | `TestPeriodSeconds` | Conversion T = 1/f: T=1 s at ω²=4π², T=2 s at ω²=π², T=+∞ for rigid-body zero eigenvalue |
 
-### Results (March 12, 2026)
+### Results (March 23, 2026)
 
 | Case | Element | Numerical | Theoretical | Rel. Err (%) | Status |
 |------|---------|-----------|-------------|--------------|--------|
@@ -965,8 +1023,13 @@ The package already ships five implementations: `Cholesky`, `LU`, `SkylineLDL`, 
 `ModalAnalysis` (eigenvalue analysis) is fully implemented — see [Layer 4 – Analysis & Solvers](#layer-4--analysis--solvers).
 
 Planned extensions:
-- **Nonlinear static** (Newton-Raphson with load stepping)
 - **Dynamic** (Newmark-β time integration)
+- **Nonlinear geometry** (P-Δ / co-rotational frame/shell)
+- **Fibre beam-column** (distributed plasticity)
+
+Completed extensions:
+- **Nonlinear static** (Newton-Raphson) ✓  — `StaticNonlinearAnalysis`, `SteelBilinear`, `ConcretePararect`
+- **Winkler elastic foundation** ✓  — `WinklerBeam2D`, `WinklerBeam3D`, `WinklerShellMITC4`
 
 ---
 
