@@ -534,6 +534,24 @@ go build -o femgo ./cmd/femgo
 
 **Prescribed displacements**: add a `"values"` array to `boundary_conditions` parallel to `"dofs"`. Omitted values default to 0.
 
+**Materials and sections**: properties can be defined inline in each element *or* extracted into named arrays and referenced by id.
+
+```json
+"materials": [
+  {"id": "steel", "type": "isotropic_linear", "E": 210000, "nu": 0.3}
+],
+"sections": [
+  {"id": "HEA200", "A": 5380, "Iy": 49100000, "Iz": 8356000, "J": 151000, "Asy": 1790, "Asz": 3130},
+  {"id": "plate10", "thickness": 10}
+],
+"elements": [
+  {"type": "elastic_beam_3d", "material": "steel", "section": "HEA200", "nodes": [0,1], "vec_xz": [0,0,1]},
+  {"type": "dkt3_3d",          "material": "steel", "section": "plate10", "nodes": [0,1,2]}
+]
+```
+
+`"materials"` entries follow the same schema as [Material types in JSON](#material-types-in-json). `"sections"` entries support: `A`, `Iy`, `Iz`, `J`, `Asy`, `Asz` (beam sections) and `thickness` (shell/plate sections). Inline element values take precedence over referenced values, so partial overrides are allowed.
+
 #### Load types
 
 All load types use a `"type"` discriminator field. Omitting `"type"` is equivalent to `"nodal"`.
