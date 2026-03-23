@@ -159,16 +159,20 @@ type LoadInput struct {
 	Value float64 `json:"value,omitempty"`
 
 	// Load type discriminator (omit or "nodal" for concentrated nodal loads)
-	Type string `json:"type,omitempty"` // "nodal"|"surface_pressure"|"beam_dist"|"body_force"
+	Type string `json:"type,omitempty"` // "nodal"|"surface_pressure"|"beam_dist"|"beam_tri_dist"|"body_force"
 
 	// Surface pressure
 	FaceNodes [4]int  `json:"face_nodes,omitempty"` // global node IDs (CCW from outside)
 	Pressure  float64 `json:"pressure,omitempty"`
 
-	// Beam distributed load
+	// Beam distributed load (uniform)
 	Element   int        `json:"element,omitempty"`   // element index
 	Dir       [3]float64 `json:"dir,omitempty"`       // global direction unit vector
-	Intensity float64    `json:"intensity,omitempty"` // load per unit length
+	Intensity float64    `json:"intensity,omitempty"` // load per unit length (beam_dist)
+
+	// Beam linearly varying load (trapezoidal / triangular)
+	IntensityI float64 `json:"intensity_i,omitempty"` // load per unit length at node i
+	IntensityJ float64 `json:"intensity_j,omitempty"` // load per unit length at node j
 
 	// Body force
 	Rho float64    `json:"rho,omitempty"` // mass density

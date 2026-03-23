@@ -207,6 +207,12 @@ func solveProblem(input ProblemInput) ProblemOutput {
 			}
 			dom.AddBeamDistLoad(ld.Element, ld.Dir, ld.Intensity)
 
+		case "beam_tri_dist":
+			if ld.Element < 0 || ld.Element >= len(dom.Elements) {
+				return errorResponse("load[%d] beam_tri_dist: element %d out of range", i, ld.Element)
+			}
+			dom.AddBeamLinearLoad(ld.Element, ld.Dir, ld.IntensityI, ld.IntensityJ)
+
 		case "body_force":
 			if ld.Element < 0 || ld.Element >= len(dom.Elements) {
 				return errorResponse("load[%d] body_force: element %d out of range", i, ld.Element)

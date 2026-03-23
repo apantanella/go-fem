@@ -219,3 +219,36 @@ func (b *TimoshenkoBeam2D) EquivalentNodalLoad(globalDir [3]float64, intensity f
 	}
 	return fGlob
 }
+
+// EquivalentNodalLoadLinear returns work-equivalent nodal forces for a
+// linearly varying (trapezoidal) distributed load.
+func (b *TimoshenkoBeam2D) EquivalentNodalLoadLinear(globalDir [3]float64, intensityI, intensityJ float64) *mat.VecDense {
+	L := b.length
+	L2 := L * L
+	c, s := b.cos, b.sin
+
+	qxi := (c*globalDir[0] + s*globalDir[1]) * intensityI
+	qyi := (-s*globalDir[0] + c*globalDir[1]) * intensityI
+	qxj := (c*globalDir[0] + s*globalDir[1]) * intensityJ
+	qyj := (-s*globalDir[0] + c*globalDir[1]) * intensityJ
+
+	fLoc := mat.NewVecDense(6, nil)
+	fLoc.SetVec(0, L/6*(2*qxi+qxj))
+	fLoc.SetVec(1, L/20*(7*qyi+3*qyj))
+	fLoc.SetVec(2, L2/60*(3*qyi+2*qyj))
+	fLoc.SetVec(3, L/6*(qxi+2*qxj))
+	fLoc.SetVec(4, L/20*(3*qyi+7*qyj))
+	fLoc.SetVec(5, -L2/60*(2*qyi+3*qyj))
+
+	fGlob := mat.NewVecDense(6, nil)
+	for blk := 0; blk < 2; blk++ {
+		o := 3 * blk
+		fx := fLoc.AtVec(o + 0)
+		fy := fLoc.AtVec(o + 1)
+		mz := fLoc.AtVec(o + 2)
+		fGlob.SetVec(o+0, c*fx-s*fy)
+		fGlob.SetVec(o+1, s*fx+c*fy)
+		fGlob.SetVec(o+2, mz)
+	}
+	return fGlob
+}

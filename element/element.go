@@ -17,6 +17,14 @@ type EquivalentNodalLoader interface {
 	EquivalentNodalLoad(globalDir [3]float64, intensity float64) *mat.VecDense
 }
 
+// LinearDistLoader is implemented by elements that convert a linearly varying
+// (trapezoidal / triangular) distributed load into work-equivalent nodal forces.
+// intensityI is the load per unit length at node i; intensityJ at node j.
+// Returns a vector of length NumDOF() in global coordinates.
+type LinearDistLoader interface {
+	EquivalentNodalLoadLinear(globalDir [3]float64, intensityI, intensityJ float64) *mat.VecDense
+}
+
 // BodyForceLoader is implemented by elements that can compute nodal forces
 // due to a body force (gravity, centrifugal, etc.).
 // g is the body-force acceleration vector (e.g. [0,-9.81,0]).

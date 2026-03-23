@@ -197,3 +197,67 @@ func TestSurfacePressureUnitSquare(t *testing.T) {
 		t.Errorf("total Fz = %.6g, want %.6g", totalFz, expected)
 	}
 }
+
+// TestEquivalentNodalLoadLinearBeam verifies the work-equivalent nodal load
+// vector for a linearly varying transverse load on an elastic_beam_3d element.
+//
+// Physical derivation (Hermite fixed-end reactions):
+//
+//	q_i = -1000 N/m at node i (x=0), q_j = 0 at node j (x=L) — triangular load.
+//
+//	Fy_i = L/20·(7·qi + 3·qj) = 4/20·(7·(-1000)+0) = -1400 N
+//	Mz_i = L²/60·(3·qi + 2·qj) = 16/60·(3·(-1000)+0) ≈ -800 N·m
+//	Fy_j = L/20·(3·qi + 7·qj) = 4/20·(3·(-1000)+0) = -600 N
+//	Mz_j = -L²/60·(2·qi + 3·qj) = -16/60·(2·(-1000)+0) ≈ +533.33 N·m
+//
+//	Total Fy = -1400 + (-600) = -2000 = qi·L/2 (total triangular load) ✓
+//
+// Why valuable: confirms the trapezoidal formulas reduce correctly to the
+// triangular case and that total force = qi·L/2.
+func TestEquivalentNodalLoadLinearBeam(t *testing.T) {
+	sec := section.BeamSection3D{A: 0.01, Iy: 8.33e-6, Iz: 8.33e-6, J: 1.41e-5}
+	coords := [2][3]float64{{0, 0, 0}, {4, 0, 0}} // L=4
+	b := frame.NewElasticBeam3D(0, [2]int{0, 1}, coords, 200000, 80000, sec, [3]float64{0, 0, 1})
+
+	const L = 4.0
+	qi := -1000.0 // N/m at node i
+	qj := 0.0     // N/m at node j (triangular)
+
+	f := b.EquivalentNodalLoadLinear([3]float64{0, 1, 0}, qi, qj)
+
+	tol := 1e-9
+	wantFyi := L / 20 * (7*qi + 3*qj)
+	wantFyj := L / 20 * (3*qi + 7*qj)
+	wantMzi := L * L / 60 * (3*qi + 2*qj)
+	wantMzj := -L * L / 60 * (2*qi + 3*qj)
+
+	if math.Abs(f.AtVec(1)-wantFyi) > tol {
+		t.Errorf("Fy_i = %.6g, want %.6g", f.AtVec(1), wantFyi)
+	}
+	if math.Abs(f.AtVec(7)-wantFyj) > tol {
+		t.Errorf("Fy_j = %.6g, want %.6g", f.AtVec(7), wantFyj)
+	}
+	if math.Abs(f.AtVec(5)-wantMzi) > tol {
+		t.Errorf("Mz_i = %.6g, want %.6g", f.AtVec(5), wantMzi)
+	}
+	if math.Abs(f.AtVec(11)-wantMzj) > tol {
+		t.Errorf("Mz_j = %.6g, want %.6g", f.AtVec(11), wantMzj)
+	}
+
+	// Total force must equal qi·L/2 (integral of triangular load over L)
+	totalFy := f.AtVec(1) + f.AtVec(7)
+	wantTotal := qi * L / 2
+	if math.Abs(totalFy-wantTotal)/math.Abs(wantTotal) > 1e-9 {
+		t.Errorf("total Fy = %.6g, want %.6g (qi·L/2)", totalFy, wantTotal)
+	}
+
+	// Verify UDL degeneracy: when qi=qj the result must match EquivalentNodalLoad.
+	qUDL := -500.0
+	fUDL := b.EquivalentNodalLoad([3]float64{0, 1, 0}, qUDL)
+	fLin := b.EquivalentNodalLoadLinear([3]float64{0, 1, 0}, qUDL, qUDL)
+	for k := 0; k < 12; k++ {
+		if math.Abs(fLin.AtVec(k)-fUDL.AtVec(k)) > 1e-10 {
+			t.Errorf("UDL degeneracy DOF %d: linear=%.6g, udl=%.6g", k, fLin.AtVec(k), fUDL.AtVec(k))
+		}
+	}
+}

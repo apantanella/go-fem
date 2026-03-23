@@ -254,3 +254,36 @@ func (wb *WinklerBeam2D) EquivalentNodalLoad(globalDir [3]float64, intensity flo
 func (wb *WinklerBeam2D) BodyForceLoad(g [3]float64, rho float64) *mat.VecDense {
 	return wb.EquivalentNodalLoad(g, rho*wb.Sec.A)
 }
+
+// EquivalentNodalLoadLinear returns work-equivalent nodal forces for a
+// linearly varying (trapezoidal) distributed load.
+func (wb *WinklerBeam2D) EquivalentNodalLoadLinear(globalDir [3]float64, intensityI, intensityJ float64) *mat.VecDense {
+	L := wb.length
+	c, s := wb.cos, wb.sin
+	pxi := globalDir[0]*c + globalDir[1]*s
+	pyi := -globalDir[0]*s + globalDir[1]*c
+	pxj := pxi
+	pyj := pyi
+	pxi *= intensityI
+	pyi *= intensityI
+	pxj *= intensityJ
+	pyj *= intensityJ
+
+	L2 := L * L
+	floc := [6]float64{
+		L / 6 * (2*pxi + pxj),
+		L / 20 * (7*pyi + 3*pyj),
+		L * L2 / 60 * (3*pyi + 2*pyj),
+		L / 6 * (pxi + 2*pxj),
+		L / 20 * (3*pyi + 7*pyj),
+		-L * L2 / 60 * (2*pyi + 3*pyj),
+	}
+	fglob := mat.NewVecDense(6, nil)
+	for n := 0; n < 2; n++ {
+		o := n * 3
+		fglob.SetVec(o, c*floc[o]-s*floc[o+1])
+		fglob.SetVec(o+1, s*floc[o]+c*floc[o+1])
+		fglob.SetVec(o+2, floc[o+2])
+	}
+	return fglob
+}

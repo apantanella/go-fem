@@ -214,7 +214,8 @@ dt := dom.DOFTypeAt(globalDOFIdx) // dof.Type
 | Method | Description | Supported elements |
 |--------|-------------|-------------------|
 | `ApplyLoad(node, dof, value)` | Concentrated force or moment | All |
-| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `ElasticBeam2D`, `TimoshenkoBeam3D`, `TimoshenkoBeam2D` |
+| `AddBeamDistLoad(elemIdx, dir, intensity)` | UDL (N/m), work-equivalent nodal forces | `ElasticBeam3D`, `ElasticBeam2D`, `TimoshenkoBeam3D`, `TimoshenkoBeam2D`, `WinklerBeam2D`, `WinklerBeam3D` |
+| `AddBeamLinearLoad(elemIdx, dir, intensityI, intensityJ)` | Linearly varying load (trapezoidal / triangular), work-equivalent nodal forces | same as above |
 | `AddSurfacePressure(faceNodes[4], P)` | Uniform pressure on quad face (2×2 Gauss) | Any 4 nodes |
 | `AddBodyForce(elemIdx, rho, g)` | Gravity/body force | **All elements** (see table below) |
 
@@ -561,12 +562,14 @@ All load types use a `"type"` discriminator field. Omitting `"type"` is equivale
 | `"nodal"` *(default)* | `node`, `dof`, `value` | Concentrated force or moment |
 | `"surface_pressure"` | `face_nodes` (4 ints), `pressure` | Uniform pressure on a quad face |
 | `"beam_dist"` | `element`, `dir` ([3]float64), `intensity` | UDL on a beam element (N/m) |
+| `"beam_tri_dist"` | `element`, `dir` ([3]float64), `intensity_i`, `intensity_j` | Linearly varying (trapezoidal / triangular) load on a beam element. `intensity_i` at node i, `intensity_j` at node j (N/m). Set one to 0 for a purely triangular load |
 | `"body_force"` | `element`, `rho`, `g` ([3]float64) | Gravity/body force on a solid element |
 
 ```json
 "loads": [
   {"node": 3, "dof": 1, "value": -10000},
   {"type": "beam_dist", "element": 0, "dir": [0, -1, 0], "intensity": 5000},
+  {"type": "beam_tri_dist", "element": 1, "dir": [0, -1, 0], "intensity_i": 8000, "intensity_j": 0},
   {"type": "surface_pressure", "face_nodes": [4, 5, 6, 7], "pressure": 1000},
   {"type": "body_force", "element": 0, "rho": 7800, "g": [0, -9.81, 0]}
 ]

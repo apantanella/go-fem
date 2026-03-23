@@ -48,6 +48,16 @@ type BeamLoad struct {
 	Intensity float64    // load per unit length (N/m)
 }
 
+// BeamLinearLoad represents a linearly varying (trapezoidal / triangular)
+// distributed load on a single beam element.
+// IntensityI is the load per unit length at node i; IntensityJ at node j.
+type BeamLinearLoad struct {
+	ElemIdx    int
+	Dir        [3]float64
+	IntensityI float64
+	IntensityJ float64
+}
+
 // BodyForce represents a gravitational / body-force load on a single element.
 type BodyForce struct {
 	ElemIdx int
@@ -63,9 +73,10 @@ type Domain struct {
 	Loads    []NodalLoad
 
 	// Distributed load types
-	SurfaceLoads []SurfacePressure
-	BeamLoads    []BeamLoad
-	BodyForces   []BodyForce
+	SurfaceLoads    []SurfacePressure
+	BeamLoads       []BeamLoad
+	BeamLinearLoads []BeamLinearLoad
+	BodyForces      []BodyForce
 
 	// DOFPerNode is auto-detected during Assemble:
 	// 2 for pure plane stress/strain, 3 for solids/truss or plane frames,
@@ -139,6 +150,12 @@ func (d *Domain) AddSurfacePressure(faceNodes [4]int, p float64) {
 // AddBeamDistLoad registers a uniformly distributed load on element elemIdx.
 func (d *Domain) AddBeamDistLoad(elemIdx int, dir [3]float64, intensity float64) {
 	d.BeamLoads = append(d.BeamLoads, BeamLoad{ElemIdx: elemIdx, Dir: dir, Intensity: intensity})
+}
+
+// AddBeamLinearLoad registers a linearly varying distributed load on element elemIdx.
+// intensityI is the load per unit length at node i; intensityJ at node j.
+func (d *Domain) AddBeamLinearLoad(elemIdx int, dir [3]float64, intensityI, intensityJ float64) {
+	d.BeamLinearLoads = append(d.BeamLinearLoads, BeamLinearLoad{ElemIdx: elemIdx, Dir: dir, IntensityI: intensityI, IntensityJ: intensityJ})
 }
 
 // AddBodyForce registers a body-force load on element elemIdx.
@@ -278,6 +295,28 @@ func (d *Domain) Assemble() {
 			continue
 		}
 		fe := loader.EquivalentNodalLoad(bl.Dir, bl.Intensity)
+		nids := elem.NodeIDs()
+		dofTypes := elem.DOFTypes()
+		elemDPN := elem.DOFPerNode()
+		for i, dt := range dofTypes {
+			nodeIdx := i / elemDPN
+			nodeID := nids[nodeIdx]
+			gdof := nodeID*dpn + d.dofOffset[int(dt)]
+			d.F.SetVec(gdof, d.F.AtVec(gdof)+fe.AtVec(i))
+		}
+	}
+
+	// --- Linearly varying (trapezoidal/triangular) beam loads ---
+	for _, bl := range d.BeamLinearLoads {
+		if bl.ElemIdx < 0 || bl.ElemIdx >= len(d.Elements) {
+			continue
+		}
+		elem := d.Elements[bl.ElemIdx]
+		loader, ok := elem.(element.LinearDistLoader)
+		if !ok {
+			continue
+		}
+		fe := loader.EquivalentNodalLoadLinear(bl.Dir, bl.IntensityI, bl.IntensityJ)
 		nids := elem.NodeIDs()
 		dofTypes := elem.DOFTypes()
 		elemDPN := elem.DOFPerNode()

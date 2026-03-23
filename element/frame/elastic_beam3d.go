@@ -401,3 +401,48 @@ func cross(a, b [3]float64) [3]float64 {
 func norm(v [3]float64) float64 {
 	return math.Sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2])
 }
+
+// EquivalentNodalLoadLinear returns work-equivalent nodal forces for a
+// linearly varying (trapezoidal) distributed load. intensityI is the load per
+// unit length at node i and intensityJ at node j.
+func (b *ElasticBeam3D) EquivalentNodalLoadLinear(globalDir [3]float64, intensityI, intensityJ float64) *mat.VecDense {
+	L := b.length
+	L2 := L * L
+
+	var qLocI, qLocJ [3]float64
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			qLocI[i] += b.R[i][j] * globalDir[j]
+			qLocJ[i] += b.R[i][j] * globalDir[j]
+		}
+		qLocI[i] *= intensityI
+		qLocJ[i] *= intensityJ
+	}
+	qxi, qyi, qzi := qLocI[0], qLocI[1], qLocI[2]
+	qxj, qyj, qzj := qLocJ[0], qLocJ[1], qLocJ[2]
+
+	fLoc := mat.NewVecDense(12, nil)
+	fLoc.SetVec(0, L/6*(2*qxi+qxj))       // Fx node i
+	fLoc.SetVec(1, L/20*(7*qyi+3*qyj))    // Fy node i
+	fLoc.SetVec(2, L/20*(7*qzi+3*qzj))    // Fz node i
+	fLoc.SetVec(4, -L2/60*(3*qzi+2*qzj))  // My node i
+	fLoc.SetVec(5, L2/60*(3*qyi+2*qyj))   // Mz node i
+	fLoc.SetVec(6, L/6*(qxi+2*qxj))       // Fx node j
+	fLoc.SetVec(7, L/20*(3*qyi+7*qyj))    // Fy node j
+	fLoc.SetVec(8, L/20*(3*qzi+7*qzj))    // Fz node j
+	fLoc.SetVec(10, L2/60*(2*qzi+3*qzj))  // My node j
+	fLoc.SetVec(11, -L2/60*(2*qyi+3*qyj)) // Mz node j
+
+	fGlob := mat.NewVecDense(12, nil)
+	for blk := 0; blk < 4; blk++ {
+		off := 3 * blk
+		for i := 0; i < 3; i++ {
+			var sum float64
+			for j := 0; j < 3; j++ {
+				sum += b.R[j][i] * fLoc.AtVec(off+j)
+			}
+			fGlob.SetVec(off+i, sum)
+		}
+	}
+	return fGlob
+}
