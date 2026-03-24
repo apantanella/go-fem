@@ -419,6 +419,16 @@ func (d *Domain) FreeDOFs() []int {
 	return free
 }
 
+// DOFOffsetOf returns the within-node offset of a DOF type index (0–5).
+// Returns -1 if that DOF type is not active in the current problem.
+// Must be called after Assemble().
+func (d *Domain) DOFOffsetOf(dofType int) int {
+	if dofType < 0 || dofType > 5 {
+		return -1
+	}
+	return d.dofOffset[dofType]
+}
+
 // AssembleMassMatrix constructs the global consistent mass matrix M.
 // Must be called after Assemble() (which sets DOFPerNode and dofOffset).
 // Elements that do not implement element.MassMatrixAssembler are skipped.

@@ -683,6 +683,11 @@ Set `"analysis_type": "response_spectrum"` to switch to seismic mode. The `"load
     {"node": 0, "ux": 0.0, "uy": 0.0, "uz": 0.0},
     {"node": 1, "ux": 2.5e-4, "uy": 0.0, "uz": 0.0}
   ],
+  "reactions": [
+    {"node": 0, "dof": 0, "dof_name": "ux", "value": -5000.0},
+    {"node": 0, "dof": 1, "dof_name": "uy", "value": 0.0},
+    {"node": 0, "dof": 2, "dof_name": "uz", "value": 0.0}
+  ],
   "element_forces": [
     {"id": 0, "type": "truss_3d", "N": 5000.0, "sigma": 50.0}
   ],
@@ -692,6 +697,8 @@ Set `"analysis_type": "response_spectrum"` to switch to seismic mode. The `"load
   "elapsed_ms": 1.3
 }
 ```
+
+`reactions` lists every constrained DOF with its support reaction (force or moment). Each entry contains `node`, `dof` (0–5), `dof_name` (`"ux"`…`"rz"`), and `value` (positive = in the global DOF direction). Computed as `K·U − F_ext` (linear) or `R_int − F_ext` (nonlinear) at constrained DOFs.
 
 `element_forces` is always populated. The fields present depend on element type:
 

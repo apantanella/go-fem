@@ -188,6 +188,7 @@ type ProblemOutput struct {
 	Error         string                `json:"error,omitempty"`
 	Info          *InfoOutput           `json:"info,omitempty"`
 	Displacements []DisplacementOutput  `json:"displacements,omitempty"`
+	Reactions     []ReactionOutput      `json:"reactions,omitempty"`
 	ElementForces []ElementForcesOutput `json:"element_forces,omitempty"`
 	Summary       *SummaryOutput        `json:"summary,omitempty"`
 	ElapsedMs     float64               `json:"elapsed_ms,omitempty"`
@@ -198,6 +199,16 @@ type ProblemOutput struct {
 
 	// Nonlinear static analysis output (only when analysis_type = "nonlinear_static")
 	NLResult *NLOutput `json:"nl_result,omitempty"`
+}
+
+// ReactionOutput holds the support reaction at one constrained DOF.
+// Node is the zero-based node index; DOF is 0=UX…5=RZ; Value is the reaction
+// force or moment (positive in the global DOF direction).
+type ReactionOutput struct {
+	Node    int     `json:"node"`
+	DOF     int     `json:"dof"`
+	DOFName string  `json:"dof_name"` // "ux"|"uy"|"uz"|"rx"|"ry"|"rz"
+	Value   float64 `json:"value"`
 }
 
 // NLOutput reports the convergence details of the Newton-Raphson analysis.

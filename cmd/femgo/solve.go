@@ -18,6 +18,8 @@ import (
 	"go-fem/material"
 	"go-fem/section"
 	"go-fem/solver"
+
+	"gonum.org/v1/gonum/mat"
 )
 
 var dofNames = [6]string{"ux", "uy", "uz", "rx", "ry", "rz"}
@@ -254,6 +256,7 @@ func solveProblem(input ProblemInput) ProblemOutput {
 		return errorResponse("analysis failed: %v", err)
 	}
 
+	reactions := extractReactions(dom, U, nil)
 	disp := dom.SetDisplacements(U)
 	dpn := dom.DOFPerNode
 
@@ -290,6 +293,7 @@ func solveProblem(input ProblemInput) ProblemOutput {
 			Dimensions:  declaredDim,
 		},
 		Displacements: disps,
+		Reactions:     reactions,
 		ElementForces: extractElementForces(dom.Elements, input.Elements),
 		Summary: &SummaryOutput{
 			MaxAbsDisplacement: MaxDispOutput{
@@ -810,6 +814,60 @@ func errorResponse(format string, args ...any) ProblemOutput {
 		Success: false,
 		Error:   fmt.Sprintf(format, args...),
 	}
+}
+
+// extractReactions computes support reactions at all constrained DOFs.
+//
+// For linear problems call with Rint=nil; the function then re-assembles dom
+// (restoring the original K and F) and uses R = K·U − F_ext.
+//
+// For nonlinear problems pass Rint = dom.AssembleResisting(); reactions are
+// R = Rint − F_ext (exact regardless of element material nonlinearity).
+func extractReactions(dom *domain.Domain, U *mat.VecDense, Rint *mat.VecDense) []ReactionOutput {
+	// Rebuild F_ext (and K if needed) without Dirichlet modification.
+	dom.Assemble()
+
+	ndof := U.Len()
+	dpn := dom.DOFPerNode
+
+	// Determine which global DOFs are constrained.
+	constrained := make([]bool, ndof)
+	for _, bc := range dom.BCs {
+		off := dom.DOFOffsetOf(bc.DOF)
+		if off < 0 {
+			continue
+		}
+		gd := bc.NodeID*dpn + off
+		if gd >= 0 && gd < ndof {
+			constrained[gd] = true
+		}
+	}
+
+	// Compute reaction vector: Rint - F_ext.
+	// For linear: Rint = K·U.
+	var rintVec *mat.VecDense
+	if Rint != nil {
+		rintVec = Rint
+	} else {
+		rintVec = mat.NewVecDense(ndof, nil)
+		rintVec.MulVec(dom.K, U)
+	}
+
+	var reactions []ReactionOutput
+	for gd := 0; gd < ndof; gd++ {
+		if !constrained[gd] {
+			continue
+		}
+		nodeID := gd / dpn
+		dofType := int(dom.DOFTypeAt(gd))
+		reactions = append(reactions, ReactionOutput{
+			Node:    nodeID,
+			DOF:     dofType,
+			DOFName: dofNames[dofType],
+			Value:   rintVec.AtVec(gd) - dom.F.AtVec(gd),
+		})
+	}
+	return reactions
 }
 
 // extractElementForces builds the per-element post-processing results.
@@ -1402,6 +1460,9 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 		return errorResponse("nonlinear analysis: %v", err)
 	}
 
+	// Compute reactions using exact internal resisting forces.
+	Rint := dom.AssembleResisting()
+	reactionsNL := extractReactions(dom, result.U, Rint)
 	disp := dom.SetDisplacements(result.U)
 	dpn := dom.DOFPerNode
 
@@ -1444,6 +1505,7 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 			Dimensions:  declaredDim,
 		},
 		Displacements: disps,
+		Reactions:     reactionsNL,
 		ElementForces: extractElementForces(dom.Elements, input.Elements),
 		Summary: &SummaryOutput{
 			MaxAbsDisplacement: MaxDispOutput{
