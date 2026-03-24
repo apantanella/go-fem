@@ -40,8 +40,9 @@ type ElasticBeam3D struct {
 	ke     *mat.Dense
 	kl     *mat.Dense // local stiffness (before transformation) for EndForces
 	length float64
-	R      [3][3]float64 // rotation matrix: rows are local axes in global coords
-	ue     [12]float64   // element displacements in global coords (set by Update)
+	R      [3][3]float64  // rotation matrix: rows are local axes in global coords
+	ue     [12]float64    // element displacements in global coords (set by Update)
+	fFixed [12]float64    // accumulated fixed-end forces in local coords (from distributed loads)
 }
 
 // NewElasticBeam3D creates a 3D elastic beam element.
@@ -214,7 +215,14 @@ func (b *ElasticBeam3D) Update(disp []float64) error {
 }
 
 func (b *ElasticBeam3D) CommitState() error   { return nil }
-func (b *ElasticBeam3D) RevertToStart() error { b.ue = [12]float64{}; return nil }
+func (b *ElasticBeam3D) RevertToStart() error {
+	b.ue = [12]float64{}
+	b.fFixed = [12]float64{}
+	return nil
+}
+
+// ResetFixedEndForces clears accumulated fixed-end forces (for re-assembly).
+func (b *ElasticBeam3D) ResetFixedEndForces() { b.fFixed = [12]float64{} }
 
 // BodyForceLoad computes work-equivalent nodal forces due to a body force
 // (ρ·A per unit length). Delegates to EquivalentNodalLoad.
@@ -256,6 +264,11 @@ func (b *ElasticBeam3D) EquivalentNodalLoad(globalDir [3]float64, intensity floa
 	fLoc.SetVec(8, qz*L/2)     // Fz at node j
 	fLoc.SetVec(10, qz*L2/12)  // My at node j
 	fLoc.SetVec(11, -qy*L2/12) // Mz at node j
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 12; i++ {
+		b.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	// Transform to global: f_global = Tᵀ · f_local (Tᵀ = blockdiag(Rᵀ,Rᵀ,Rᵀ,Rᵀ))
 	fGlob := mat.NewVecDense(12, nil)
@@ -377,13 +390,15 @@ func (b *ElasticBeam3D) EndForces() BeamEndForces {
 			}
 		}
 	}
-	// f_local = kl · u_local
+	// f_local = kl · u_local + fFixed
 	f := mat.NewVecDense(12, nil)
 	f.MulVec(b.kl, mat.NewVecDense(12, uloc[:]))
+	// Subtract equivalent nodal loads to recover true section forces:
+	// f_section = Kl·uloc - f_equiv_nodal_local
 	var ef BeamEndForces
 	for i := 0; i < 6; i++ {
-		ef.I[i] = f.AtVec(i)
-		ef.J[i] = f.AtVec(i + 6)
+		ef.I[i] = f.AtVec(i) - b.fFixed[i]
+		ef.J[i] = f.AtVec(i+6) - b.fFixed[i+6]
 	}
 	return ef
 }
@@ -432,6 +447,11 @@ func (b *ElasticBeam3D) EquivalentNodalLoadLinear(globalDir [3]float64, intensit
 	fLoc.SetVec(8, L/20*(3*qzi+7*qzj))    // Fz node j
 	fLoc.SetVec(10, L2/60*(2*qzi+3*qzj))  // My node j
 	fLoc.SetVec(11, -L2/60*(2*qyi+3*qyj)) // Mz node j
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 12; i++ {
+		b.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	fGlob := mat.NewVecDense(12, nil)
 	for blk := 0; blk < 4; blk++ {

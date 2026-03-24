@@ -52,8 +52,9 @@ type WinklerBeam3D struct {
 	ke     *mat.Dense // 12×12 global stiffness
 	kl     *mat.Dense // 12×12 beam-only local stiffness (for EndForces)
 	length float64
-	R      [3][3]float64 // rotation matrix: rows are local axes in global coords
-	ue     [12]float64   // element displacements (set by Update)
+	R      [3][3]float64  // rotation matrix: rows are local axes in global coords
+	ue     [12]float64    // element displacements (set by Update)
+	fFixed [12]float64    // accumulated fixed-end forces in local coords (from distributed loads)
 }
 
 // NewWinklerBeam3D creates a 3D Euler-Bernoulli beam on Winkler elastic foundation.
@@ -296,8 +297,15 @@ func (wb *WinklerBeam3D) Update(disp []float64) error {
 	return nil
 }
 
-func (wb *WinklerBeam3D) CommitState() error   { return nil }
-func (wb *WinklerBeam3D) RevertToStart() error { wb.ue = [12]float64{}; return nil }
+func (wb *WinklerBeam3D) CommitState() error { return nil }
+func (wb *WinklerBeam3D) RevertToStart() error {
+	wb.ue = [12]float64{}
+	wb.fFixed = [12]float64{}
+	return nil
+}
+
+// ResetFixedEndForces clears accumulated fixed-end forces (for re-assembly).
+func (wb *WinklerBeam3D) ResetFixedEndForces() { wb.fFixed = [12]float64{} }
 
 // EndForces returns the beam section forces at both ends in local coordinates.
 // Convention per end: [N, Vy, Vz, Mx, My, Mz].
@@ -314,10 +322,12 @@ func (wb *WinklerBeam3D) EndForces() BeamEndForces {
 	}
 	f := mat.NewVecDense(12, nil)
 	f.MulVec(wb.kl, mat.NewVecDense(12, uloc[:]))
+	// Subtract equivalent nodal loads to recover true section forces:
+	// f_section = Kl·uloc - f_equiv_nodal_local
 	var ef BeamEndForces
 	for i := 0; i < 6; i++ {
-		ef.I[i] = f.AtVec(i)
-		ef.J[i] = f.AtVec(i + 6)
+		ef.I[i] = f.AtVec(i) - wb.fFixed[i]
+		ef.J[i] = f.AtVec(i+6) - wb.fFixed[i+6]
 	}
 	return ef
 }
@@ -349,6 +359,11 @@ func (wb *WinklerBeam3D) EquivalentNodalLoad(globalDir [3]float64, intensity flo
 	fLoc.SetVec(8, qz*L/2)
 	fLoc.SetVec(10, qz*L2/12)
 	fLoc.SetVec(11, -qy*L2/12)
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 12; i++ {
+		wb.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	fGlob := mat.NewVecDense(12, nil)
 	for blk := 0; blk < 4; blk++ {
@@ -398,6 +413,11 @@ func (wb *WinklerBeam3D) EquivalentNodalLoadLinear(globalDir [3]float64, intensi
 	fLoc.SetVec(8, L/20*(3*qzi+7*qzj))
 	fLoc.SetVec(10, L2/60*(2*qzi+3*qzj))
 	fLoc.SetVec(11, -L2/60*(2*qyi+3*qyj))
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 12; i++ {
+		wb.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	fGlob := mat.NewVecDense(12, nil)
 	for blk := 0; blk < 4; blk++ {

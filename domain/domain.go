@@ -284,6 +284,13 @@ func (d *Domain) Assemble() {
 		}
 	}
 
+	// --- Reset fixed-end forces before (re-)applying beam loads ---
+	for _, elem := range d.Elements {
+		if r, ok := elem.(element.FixedForceResetter); ok {
+			r.ResetFixedEndForces()
+		}
+	}
+
 	// --- Beam distributed loads ---
 	for _, bl := range d.BeamLoads {
 		if bl.ElemIdx < 0 || bl.ElemIdx >= len(d.Elements) {

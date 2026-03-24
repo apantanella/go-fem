@@ -53,6 +53,7 @@ type WinklerBeam2D struct {
 	cos    float64
 	sin    float64
 	ue     [6]float64
+	fFixed [6]float64 // accumulated fixed-end forces in local coords (from distributed loads)
 }
 
 // NewWinklerBeam2D creates a 2D beam on Winkler elastic foundation.
@@ -198,8 +199,15 @@ func (wb *WinklerBeam2D) Update(disp []float64) error {
 	return nil
 }
 
-func (wb *WinklerBeam2D) CommitState() error   { return nil }
-func (wb *WinklerBeam2D) RevertToStart() error { wb.ue = [6]float64{}; return nil }
+func (wb *WinklerBeam2D) CommitState() error { return nil }
+func (wb *WinklerBeam2D) RevertToStart() error {
+	wb.ue = [6]float64{}
+	wb.fFixed = [6]float64{}
+	return nil
+}
+
+// ResetFixedEndForces clears accumulated fixed-end forces (for re-assembly).
+func (wb *WinklerBeam2D) ResetFixedEndForces() { wb.fFixed = [6]float64{} }
 
 // EndForces returns the section forces at both ends in local coordinates.
 // [N, V, M] convention per end.
@@ -216,9 +224,11 @@ func (wb *WinklerBeam2D) EndForces() BeamEndForces2D {
 	}
 	fl := mat.NewVecDense(6, nil)
 	fl.MulVec(wb.kl, mat.NewVecDense(6, ul[:]))
+	// Subtract equivalent nodal loads to recover true section forces:
+	// f_section = Kl·uloc - f_equiv_nodal_local
 	return BeamEndForces2D{
-		I: [3]float64{fl.AtVec(0), fl.AtVec(1), fl.AtVec(2)},
-		J: [3]float64{fl.AtVec(3), fl.AtVec(4), fl.AtVec(5)},
+		I: [3]float64{fl.AtVec(0) - wb.fFixed[0], fl.AtVec(1) - wb.fFixed[1], fl.AtVec(2) - wb.fFixed[2]},
+		J: [3]float64{fl.AtVec(3) - wb.fFixed[3], fl.AtVec(4) - wb.fFixed[4], fl.AtVec(5) - wb.fFixed[5]},
 	}
 }
 
@@ -237,6 +247,10 @@ func (wb *WinklerBeam2D) EquivalentNodalLoad(globalDir [3]float64, intensity flo
 	floc := [6]float64{
 		px * L / 2, py * L / 2, py * L * L / 12,
 		px * L / 2, py * L / 2, -py * L * L / 12,
+	}
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 6; i++ {
+		wb.fFixed[i] += floc[i]
 	}
 	// Rotate to global
 	fglob := mat.NewVecDense(6, nil)
@@ -277,6 +291,10 @@ func (wb *WinklerBeam2D) EquivalentNodalLoadLinear(globalDir [3]float64, intensi
 		L / 6 * (pxi + 2*pxj),
 		L / 20 * (3*pyi + 7*pyj),
 		-L * L2 / 60 * (2*pyi + 3*pyj),
+	}
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 6; i++ {
+		wb.fFixed[i] += floc[i]
 	}
 	fglob := mat.NewVecDense(6, nil)
 	for n := 0; n < 2; n++ {

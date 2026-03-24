@@ -33,6 +33,7 @@ type TimoshenkoBeam2D struct {
 	cos    float64
 	sin    float64
 	ue     [6]float64
+	fFixed [6]float64 // accumulated fixed-end forces in local coords (from distributed loads)
 }
 
 // NewTimoshenkoBeam2D creates a 2D Timoshenko beam element.
@@ -156,7 +157,14 @@ func (b *TimoshenkoBeam2D) Update(disp []float64) error {
 }
 
 func (b *TimoshenkoBeam2D) CommitState() error   { return nil }
-func (b *TimoshenkoBeam2D) RevertToStart() error { b.ue = [6]float64{}; return nil }
+func (b *TimoshenkoBeam2D) RevertToStart() error {
+	b.ue = [6]float64{}
+	b.fFixed = [6]float64{}
+	return nil
+}
+
+// ResetFixedEndForces clears accumulated fixed-end forces (for re-assembly).
+func (b *TimoshenkoBeam2D) ResetFixedEndForces() { b.fFixed = [6]float64{} }
 
 // BodyForceLoad computes work-equivalent nodal forces due to a body force
 // (ρ·A per unit length). Delegates to EquivalentNodalLoad.
@@ -179,10 +187,12 @@ func (b *TimoshenkoBeam2D) EndForces() BeamEndForces2D {
 	}
 	f := mat.NewVecDense(6, nil)
 	f.MulVec(b.kl, mat.NewVecDense(6, uloc[:]))
+	// Subtract equivalent nodal loads to recover true section forces:
+	// f_section = Kl·uloc - f_equiv_nodal_local
 	var ef BeamEndForces2D
 	for i := 0; i < 3; i++ {
-		ef.I[i] = f.AtVec(i)
-		ef.J[i] = f.AtVec(i + 3)
+		ef.I[i] = f.AtVec(i) - b.fFixed[i]
+		ef.J[i] = f.AtVec(i+3) - b.fFixed[i+3]
 	}
 	return ef
 }
@@ -206,6 +216,11 @@ func (b *TimoshenkoBeam2D) EquivalentNodalLoad(globalDir [3]float64, intensity f
 	fLoc.SetVec(3, qx*L/2)
 	fLoc.SetVec(4, qy*L/2)
 	fLoc.SetVec(5, -qy*L2/12)
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 6; i++ {
+		b.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	fGlob := mat.NewVecDense(6, nil)
 	for blk := 0; blk < 2; blk++ {
@@ -239,6 +254,11 @@ func (b *TimoshenkoBeam2D) EquivalentNodalLoadLinear(globalDir [3]float64, inten
 	fLoc.SetVec(3, L/6*(qxi+2*qxj))
 	fLoc.SetVec(4, L/20*(3*qyi+7*qyj))
 	fLoc.SetVec(5, -L2/60*(2*qyi+3*qyj))
+
+	// Accumulate local fixed-end forces for EndForces post-processing
+	for i := 0; i < 6; i++ {
+		b.fFixed[i] += fLoc.AtVec(i)
+	}
 
 	fGlob := mat.NewVecDense(6, nil)
 	for blk := 0; blk < 2; blk++ {

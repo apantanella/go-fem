@@ -41,6 +41,13 @@ type MassMatrixAssembler interface {
 	GetMassMatrix(rho float64) *mat.Dense
 }
 
+// FixedForceResetter is implemented by elements that accumulate fixed-end
+// forces from distributed loads.  Assemble calls ResetFixedEndForces before
+// re-applying beam loads so that repeated assemblies do not double-count.
+type FixedForceResetter interface {
+	ResetFixedEndForces()
+}
+
 // Element is the interface for all finite elements.
 type Element interface {
 	// GetTangentStiffness returns the element stiffness matrix Ke.
