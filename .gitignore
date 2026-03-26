@@ -1,5 +1,6 @@
 # Binaries
 *.exe
+go-fem
 *.exe~
 *.dll
 *.so
@@ -30,3 +31,7 @@ Thumbs.db
 
 # Other
 roadmap.txt
+
+# Deploy scripts
+*.ps1
+*.service
