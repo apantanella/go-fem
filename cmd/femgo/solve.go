@@ -101,32 +101,15 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	t0 := time.Now()
 
 	// --- Build materials map ---
-	mats := make(map[string]material.Material3D, len(input.Materials))
-	matsRaw := make(map[string]MaterialInput, len(input.Materials))
-	for _, mi := range input.Materials {
-		matsRaw[mi.ID] = mi
-		switch mi.Type {
-		case "isotropic_linear":
-			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
-		case "orthotropic_linear":
-			m, err := material.NewOrthotropicLinear(
-				mi.Ex, mi.Ey, mi.Ez,
-				mi.Nxy, mi.Nyz, mi.Nxz,
-				mi.Gxy, mi.Gyz, mi.Gxz,
-			)
-			if err != nil {
-				return errorResponse("material %q: %v", mi.ID, err)
-			}
-			mats[mi.ID] = m
-		default:
-			return errorResponse("unknown material type: %s", mi.Type)
-		}
+	mats, matsRaw, err := buildLinearMaterialMaps(input.Materials)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// --- Build sections map ---
-	secs := make(map[string]SectionInput, len(input.Sections))
-	for _, si := range input.Sections {
-		secs[si.ID] = si
+	secs, err := buildSectionsMap(input.Sections)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// --- Build domain ---
@@ -138,24 +121,8 @@ func solveProblem(input ProblemInput) ProblemOutput {
 
 	// Validate problem dimensions before building elements.
 	declaredDim := strings.ToUpper(strings.TrimSpace(input.Dimensions))
-	if declaredDim != "" {
-		if declaredDim != "2D" && declaredDim != "3D" {
-			return errorResponse("'dimensions' must be '2D' or '3D', got %q", input.Dimensions)
-		}
-		for eid, ei := range input.Elements {
-			edim, known := elementDimension[ei.Type]
-			if !known {
-				continue // unknown type will produce a clear error in createElement
-			}
-			if edim != declaredDim {
-				canon, ok := elementCanonical[ei.Type]
-				if !ok {
-					canon = ei.Type
-				}
-				return errorResponse("element[%d] %q is a %s element, incompatible with problem dimensions %s",
-					eid, canon, edim, declaredDim)
-			}
-		}
+	if dimErr := validateDeclaredDim(declaredDim, input.Elements); dimErr != nil {
+		return errorResponse("%v", dimErr)
 	}
 
 	for eid, ei := range input.Elements {
@@ -167,20 +134,8 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	}
 
 	// --- Boundary conditions ---
-	for _, bc := range input.BoundaryConditions {
-		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
-			return errorResponse("BC: node %d out of range", bc.Node)
-		}
-		for i, dofIdx := range bc.DOFs {
-			if dofIdx < 0 || dofIdx > 5 {
-				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
-			}
-			val := 0.0
-			if i < len(bc.Values) {
-				val = bc.Values[i]
-			}
-			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
-		}
+	if bcErr := applyBCs(dom, input.BoundaryConditions); bcErr != nil {
+		return errorResponse("%v", bcErr)
 	}
 
 	// --- Loads ---
@@ -261,24 +216,7 @@ func solveProblem(input ProblemInput) ProblemOutput {
 	dpn := dom.DOFPerNode
 
 	// --- Build displacement output ---
-	disps := make([]DisplacementOutput, len(disp))
-	var maxVal float64
-	var maxNode int
-	var maxComp string
-	for i, d := range disp {
-		disps[i] = DisplacementOutput{
-			Node: i,
-			Ux:   d[0], Uy: d[1], Uz: d[2],
-			Rx: d[3], Ry: d[4], Rz: d[5],
-		}
-		for c := 0; c < 6; c++ {
-			if math.Abs(d[c]) > math.Abs(maxVal) {
-				maxVal = d[c]
-				maxNode = i
-				maxComp = dofNames[c]
-			}
-		}
-	}
+	disps, maxDisp := buildDispOutput(disp)
 
 	elapsed := time.Since(t0).Seconds() * 1000
 
@@ -295,14 +233,8 @@ func solveProblem(input ProblemInput) ProblemOutput {
 		Displacements: disps,
 		Reactions:     reactions,
 		ElementForces: extractElementForces(dom.Elements, input.Elements),
-		Summary: &SummaryOutput{
-			MaxAbsDisplacement: MaxDispOutput{
-				Node:      maxNode,
-				Component: maxComp,
-				Value:     maxVal,
-			},
-		},
-		ElapsedMs: elapsed,
+		Summary:       &SummaryOutput{MaxAbsDisplacement: maxDisp},
+		ElapsedMs:     elapsed,
 	}
 }
 
@@ -322,7 +254,7 @@ func resolveElementProps(ei ElementInput, matsRaw map[string]MaterialInput, secs
 			ei.Nu = mi.Nu
 		}
 		// Auto-compute G for isotropic materials when not specified
-		if ei.G == 0 && mi.E > 0 && mi.Nu > 0 {
+		if ei.G == 0 && mi.E > 0 {
 			ei.G = mi.E / (2 * (1 + mi.Nu))
 		}
 	}
@@ -816,6 +748,166 @@ func errorResponse(format string, args ...any) ProblemOutput {
 	}
 }
 
+// buildLinearMaterialMaps constructs the mats (Material3D) and matsRaw maps from
+// matInputs. Returns an error on duplicate IDs or unsupported material types.
+func buildLinearMaterialMaps(matInputs []MaterialInput) (map[string]material.Material3D, map[string]MaterialInput, error) {
+	mats := make(map[string]material.Material3D, len(matInputs))
+	matsRaw := make(map[string]MaterialInput, len(matInputs))
+	for _, mi := range matInputs {
+		if _, dup := matsRaw[mi.ID]; dup {
+			return nil, nil, fmt.Errorf("duplicate material id %q", mi.ID)
+		}
+		matsRaw[mi.ID] = mi
+		switch mi.Type {
+		case "isotropic_linear":
+			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		case "orthotropic_linear":
+			m, err := material.NewOrthotropicLinear(
+				mi.Ex, mi.Ey, mi.Ez,
+				mi.Nxy, mi.Nyz, mi.Nxz,
+				mi.Gxy, mi.Gyz, mi.Gxz,
+			)
+			if err != nil {
+				return nil, nil, fmt.Errorf("material %q: %v", mi.ID, err)
+			}
+			mats[mi.ID] = m
+		default:
+			return nil, nil, fmt.Errorf("unknown material type: %s", mi.Type)
+		}
+	}
+	return mats, matsRaw, nil
+}
+
+// buildAllMaterialMaps constructs mats (Material3D), matsUni (UniaxialMaterial),
+// and matsRaw from matInputs. Used by solveNonlinear. Returns error on duplicate IDs.
+func buildAllMaterialMaps(matInputs []MaterialInput) (map[string]material.Material3D, map[string]material.UniaxialMaterial, map[string]MaterialInput, error) {
+	mats := make(map[string]material.Material3D, len(matInputs))
+	matsUni := make(map[string]material.UniaxialMaterial)
+	matsRaw := make(map[string]MaterialInput, len(matInputs))
+	for _, mi := range matInputs {
+		if _, dup := matsRaw[mi.ID]; dup {
+			return nil, nil, nil, fmt.Errorf("duplicate material id %q", mi.ID)
+		}
+		matsRaw[mi.ID] = mi
+		switch mi.Type {
+		case "isotropic_linear":
+			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
+		case "orthotropic_linear":
+			m, err := material.NewOrthotropicLinear(
+				mi.Ex, mi.Ey, mi.Ez,
+				mi.Nxy, mi.Nyz, mi.Nxz,
+				mi.Gxy, mi.Gyz, mi.Gxz,
+			)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("material %q: %v", mi.ID, err)
+			}
+			mats[mi.ID] = m
+		case "steel_bilinear":
+			m, err := material.NewSteelBilinear(mi.E, mi.Fy, mi.Esh)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("material %q (steel_bilinear): %v", mi.ID, err)
+			}
+			matsUni[mi.ID] = m
+		case "concrete_pararect":
+			m, err := material.NewConcretePararect(mi.Fc, mi.EpsC1, mi.EpsCU, 0)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("material %q (concrete_pararect): %v", mi.ID, err)
+			}
+			matsUni[mi.ID] = m
+		default:
+			return nil, nil, nil, fmt.Errorf("unknown material type: %s", mi.Type)
+		}
+	}
+	return mats, matsUni, matsRaw, nil
+}
+
+// buildSectionsMap builds the sections lookup map. Returns an error on duplicate IDs.
+func buildSectionsMap(secInputs []SectionInput) (map[string]SectionInput, error) {
+	secs := make(map[string]SectionInput, len(secInputs))
+	for _, si := range secInputs {
+		if _, dup := secs[si.ID]; dup {
+			return nil, fmt.Errorf("duplicate section id %q", si.ID)
+		}
+		secs[si.ID] = si
+	}
+	return secs, nil
+}
+
+// validateDeclaredDim checks that declaredDim is "" | "2D" | "3D" and that all
+// known elements are compatible with it. Returns nil when validation passes.
+func validateDeclaredDim(declaredDim string, elements []ElementInput) error {
+	if declaredDim == "" {
+		return nil
+	}
+	if declaredDim != "2D" && declaredDim != "3D" {
+		return fmt.Errorf("'dimensions' must be '2D' or '3D', got %q", declaredDim)
+	}
+	for eid, ei := range elements {
+		edim, known := elementDimension[ei.Type]
+		if !known {
+			continue
+		}
+		if edim != declaredDim {
+			canon, ok := elementCanonical[ei.Type]
+			if !ok {
+				canon = ei.Type
+			}
+			return fmt.Errorf("element[%d] %q is a %s element, incompatible with problem dimensions %s",
+				eid, canon, edim, declaredDim)
+		}
+	}
+	return nil
+}
+
+// applyBCs applies boundary conditions to dom. If bc.Values is non-empty its length
+// must equal len(bc.DOFs); omitting Values entirely means all prescribed values are 0.
+func applyBCs(dom *domain.Domain, bcs []BCInput) error {
+	for _, bc := range bcs {
+		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
+			return fmt.Errorf("BC: node %d out of range", bc.Node)
+		}
+		if len(bc.Values) != 0 && len(bc.Values) != len(bc.DOFs) {
+			return fmt.Errorf("BC node %d: values length %d does not match dofs length %d",
+				bc.Node, len(bc.Values), len(bc.DOFs))
+		}
+		for i, dofIdx := range bc.DOFs {
+			if dofIdx < 0 || dofIdx > 5 {
+				return fmt.Errorf("BC: invalid dof %d (must be 0–5)", dofIdx)
+			}
+			val := 0.0
+			if i < len(bc.Values) {
+				val = bc.Values[i]
+			}
+			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
+		}
+	}
+	return nil
+}
+
+// buildDispOutput converts raw per-node displacement slices to output structs.
+// MaxDispOutput is determined by translational components only (ux, uy, uz).
+func buildDispOutput(disp [][6]float64) ([]DisplacementOutput, MaxDispOutput) {
+	disps := make([]DisplacementOutput, len(disp))
+	var maxVal float64
+	var maxNode int
+	var maxComp string
+	for i, d := range disp {
+		disps[i] = DisplacementOutput{
+			Node: i,
+			Ux:   d[0], Uy: d[1], Uz: d[2],
+			Rx: d[3], Ry: d[4], Rz: d[5],
+		}
+		for c := 0; c < 3; c++ { // translations only
+			if math.Abs(d[c]) > math.Abs(maxVal) {
+				maxVal = d[c]
+				maxNode = i
+				maxComp = dofNames[c]
+			}
+		}
+	}
+	return disps, MaxDispOutput{Node: maxNode, Component: maxComp, Value: maxVal}
+}
+
 // extractReactions computes support reactions at all constrained DOFs.
 //
 // For linear problems call with Rint=nil; the function then re-assembles dom
@@ -1017,32 +1109,15 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 	}
 
 	// ── Build materials ───────────────────────────────────────────────────
-	mats := make(map[string]material.Material3D, len(input.Materials))
-	matsRaw := make(map[string]MaterialInput, len(input.Materials))
-	for _, mi := range input.Materials {
-		matsRaw[mi.ID] = mi
-		switch mi.Type {
-		case "isotropic_linear":
-			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
-		case "orthotropic_linear":
-			m, err2 := material.NewOrthotropicLinear(
-				mi.Ex, mi.Ey, mi.Ez,
-				mi.Nxy, mi.Nyz, mi.Nxz,
-				mi.Gxy, mi.Gyz, mi.Gxz,
-			)
-			if err2 != nil {
-				return errorResponse("material %q: %v", mi.ID, err2)
-			}
-			mats[mi.ID] = m
-		default:
-			return errorResponse("unknown material type: %s", mi.Type)
-		}
+	mats, matsRaw, err := buildLinearMaterialMaps(input.Materials)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// ── Build sections map ───────────────────────────────────────────────
-	secs := make(map[string]SectionInput, len(input.Sections))
-	for _, si := range input.Sections {
-		secs[si.ID] = si
+	secs, err := buildSectionsMap(input.Sections)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// ── Build domain ──────────────────────────────────────────────────────
@@ -1053,24 +1128,8 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 
 	// Dimension validation (reuse same logic).
 	declaredDim := strings.ToUpper(strings.TrimSpace(input.Dimensions))
-	if declaredDim != "" && declaredDim != "2D" && declaredDim != "3D" {
-		return errorResponse("'dimensions' must be '2D' or '3D', got %q", input.Dimensions)
-	}
-	if declaredDim != "" {
-		for eid, ei := range input.Elements {
-			edim, known := elementDimension[ei.Type]
-			if !known {
-				continue
-			}
-			if edim != declaredDim {
-				canon, ok := elementCanonical[ei.Type]
-				if !ok {
-					canon = ei.Type
-				}
-				return errorResponse("element[%d] %q is a %s element, incompatible with problem dimensions %s",
-					eid, canon, edim, declaredDim)
-			}
-		}
+	if dimErr := validateDeclaredDim(declaredDim, input.Elements); dimErr != nil {
+		return errorResponse("%v", dimErr)
 	}
 
 	for eid, ei := range input.Elements {
@@ -1082,20 +1141,8 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 	}
 
 	// Boundary conditions.
-	for _, bc := range input.BoundaryConditions {
-		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
-			return errorResponse("BC: node %d out of range", bc.Node)
-		}
-		for i, dofIdx := range bc.DOFs {
-			if dofIdx < 0 || dofIdx > 5 {
-				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
-			}
-			val := 0.0
-			if i < len(bc.Values) {
-				val = bc.Values[i]
-			}
-			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
-		}
+	if bcErr := applyBCs(dom, input.BoundaryConditions); bcErr != nil {
+		return errorResponse("%v", bcErr)
 	}
 
 	// ── Element masses ────────────────────────────────────────────────────
@@ -1180,25 +1227,7 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 
 	// ── Build seismic displacement output ────────────────────────────────
 	dpn := dom.DOFPerNode
-	maxDisps := make([]DisplacementOutput, len(dom.Nodes))
-	var maxVal float64
-	var maxNode int
-	var maxComp string
-
-	for node, d := range rsaRes.MaxDisplacements {
-		maxDisps[node] = DisplacementOutput{
-			Node: node,
-			Ux:   d[0], Uy: d[1], Uz: d[2],
-			Rx: d[3], Ry: d[4], Rz: d[5],
-		}
-		for c := 0; c < dpn && c < 6; c++ {
-			if math.Abs(d[c]) > math.Abs(maxVal) {
-				maxVal = d[c]
-				maxNode = node
-				maxComp = dofNames[c]
-			}
-		}
-	}
+	maxDisps, maxDisp := buildDispOutput(rsaRes.MaxDisplacements)
 
 	combName := "cqc"
 	if useSRSS {
@@ -1221,16 +1250,12 @@ func solveSpectrum(input ProblemInput) ProblemOutput {
 			Modes:    modesOut,
 		},
 		Seismic: &SeismicOutput{
-			Combination:      combName,
-			MaxBaseShearX:    rsaRes.MaxBaseShear[0],
-			MaxBaseShearY:    rsaRes.MaxBaseShear[1],
-			MaxBaseShearZ:    rsaRes.MaxBaseShear[2],
-			MaxDisplacements: maxDisps,
-			MaxAbsDisplacement: MaxDispOutput{
-				Node:      maxNode,
-				Component: maxComp,
-				Value:     maxVal,
-			},
+			Combination:        combName,
+			MaxBaseShearX:      rsaRes.MaxBaseShear[0],
+			MaxBaseShearY:      rsaRes.MaxBaseShear[1],
+			MaxBaseShearZ:      rsaRes.MaxBaseShear[2],
+			MaxDisplacements:   maxDisps,
+			MaxAbsDisplacement: maxDisp,
 		},
 		ElapsedMs: elapsed,
 	}
@@ -1319,48 +1344,16 @@ func createElementNL(eid int, ei ElementInput, dom *domain.Domain, mats map[stri
 func solveNonlinear(input ProblemInput) ProblemOutput {
 	t0 := time.Now()
 
-	// ── Build Material3D map (for solid/shell elements) ──────────────────
-	mats := make(map[string]material.Material3D, len(input.Materials))
-	matsRaw := make(map[string]MaterialInput, len(input.Materials))
-	// ── Build UniaxialMaterial map (for nl_truss elements) ───────────────
-	matsUni := make(map[string]material.UniaxialMaterial)
-
-	for _, mi := range input.Materials {
-		matsRaw[mi.ID] = mi
-		switch mi.Type {
-		case "isotropic_linear":
-			mats[mi.ID] = material.NewIsotropicLinear(mi.E, mi.Nu)
-		case "orthotropic_linear":
-			m, err := material.NewOrthotropicLinear(
-				mi.Ex, mi.Ey, mi.Ez,
-				mi.Nxy, mi.Nyz, mi.Nxz,
-				mi.Gxy, mi.Gyz, mi.Gxz,
-			)
-			if err != nil {
-				return errorResponse("material %q: %v", mi.ID, err)
-			}
-			mats[mi.ID] = m
-		case "steel_bilinear":
-			m, err := material.NewSteelBilinear(mi.E, mi.Fy, mi.Esh)
-			if err != nil {
-				return errorResponse("material %q (steel_bilinear): %v", mi.ID, err)
-			}
-			matsUni[mi.ID] = m
-		case "concrete_pararect":
-			m, err := material.NewConcretePararect(mi.Fc, mi.EpsC1, mi.EpsCU, 0)
-			if err != nil {
-				return errorResponse("material %q (concrete_pararect): %v", mi.ID, err)
-			}
-			matsUni[mi.ID] = m
-		default:
-			return errorResponse("unknown material type: %s", mi.Type)
-		}
+	// ── Build material maps ───────────────────────────────────────────────
+	mats, matsUni, matsRaw, err := buildAllMaterialMaps(input.Materials)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// ── Build sections map ───────────────────────────────────────────────
-	secs := make(map[string]SectionInput, len(input.Sections))
-	for _, si := range input.Sections {
-		secs[si.ID] = si
+	secs, err := buildSectionsMap(input.Sections)
+	if err != nil {
+		return errorResponse("%v", err)
 	}
 
 	// ── Build domain ─────────────────────────────────────────────────────
@@ -1371,24 +1364,8 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 
 	// Dimension check (same logic as solveProblem)
 	declaredDim := strings.ToUpper(strings.TrimSpace(input.Dimensions))
-	if declaredDim != "" {
-		if declaredDim != "2D" && declaredDim != "3D" {
-			return errorResponse("'dimensions' must be '2D' or '3D', got %q", input.Dimensions)
-		}
-		for eid, ei := range input.Elements {
-			edim, known := elementDimension[ei.Type]
-			if !known {
-				continue
-			}
-			if edim != declaredDim {
-				canon, ok := elementCanonical[ei.Type]
-				if !ok {
-					canon = ei.Type
-				}
-				return errorResponse("element[%d] %q is a %s element, incompatible with problem dimensions %s",
-					eid, canon, edim, declaredDim)
-			}
-		}
+	if dimErr := validateDeclaredDim(declaredDim, input.Elements); dimErr != nil {
+		return errorResponse("%v", dimErr)
 	}
 
 	for eid, ei := range input.Elements {
@@ -1400,20 +1377,8 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 	}
 
 	// ── Boundary conditions ──────────────────────────────────────────────
-	for _, bc := range input.BoundaryConditions {
-		if bc.Node < 0 || bc.Node >= len(dom.Nodes) {
-			return errorResponse("BC: node %d out of range", bc.Node)
-		}
-		for i, dofIdx := range bc.DOFs {
-			if dofIdx < 0 || dofIdx > 5 {
-				return errorResponse("BC: invalid dof %d (must be 0–5)", dofIdx)
-			}
-			val := 0.0
-			if i < len(bc.Values) {
-				val = bc.Values[i]
-			}
-			dom.BCs = append(dom.BCs, domain.BC{NodeID: bc.Node, DOF: dofIdx, Value: val})
-		}
+	if bcErr := applyBCs(dom, input.BoundaryConditions); bcErr != nil {
+		return errorResponse("%v", bcErr)
 	}
 
 	// ── Loads ────────────────────────────────────────────────────────────
@@ -1467,24 +1432,7 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 	dpn := dom.DOFPerNode
 
 	// ── Build displacement output ─────────────────────────────────────────
-	disps := make([]DisplacementOutput, len(disp))
-	var maxVal float64
-	var maxNode int
-	var maxComp string
-	for i, d := range disp {
-		disps[i] = DisplacementOutput{
-			Node: i,
-			Ux:   d[0], Uy: d[1], Uz: d[2],
-			Rx: d[3], Ry: d[4], Rz: d[5],
-		}
-		for c := 0; c < 6; c++ {
-			if math.Abs(d[c]) > math.Abs(maxVal) {
-				maxVal = d[c]
-				maxNode = i
-				maxComp = dofNames[c]
-			}
-		}
-	}
+	disps, maxDisp := buildDispOutput(disp)
 
 	// ── NL convergence output ────────────────────────────────────────────
 	var finalRes float64
@@ -1507,13 +1455,7 @@ func solveNonlinear(input ProblemInput) ProblemOutput {
 		Displacements: disps,
 		Reactions:     reactionsNL,
 		ElementForces: extractElementForces(dom.Elements, input.Elements),
-		Summary: &SummaryOutput{
-			MaxAbsDisplacement: MaxDispOutput{
-				Node:      maxNode,
-				Component: maxComp,
-				Value:     maxVal,
-			},
-		},
+		Summary:       &SummaryOutput{MaxAbsDisplacement: maxDisp},
 		NLResult: &NLOutput{
 			Converged:       result.Converged,
 			Iterations:      result.Iterations,

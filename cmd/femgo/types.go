@@ -140,7 +140,7 @@ type ElementInput struct {
 type BCInput struct {
 	Node   int       `json:"node"`
 	DOFs   []int     `json:"dofs"`             // e.g. [0,1,2] for translations, [0,1,2,3,4,5] for all
-	Values []float64 `json:"values,omitempty"` // prescribed displacements (default 0); len must match DOFs if provided
+	Values []float64 `json:"values,omitempty"` // prescribed displacements; if provided, len(values) must equal len(dofs). Omit or leave empty for all-zero constraints.
 }
 
 // LoadInput covers all load types via a "type" discriminator.
